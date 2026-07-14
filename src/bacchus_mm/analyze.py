@@ -151,6 +151,45 @@ def report_incidents(conn: sqlite3.Connection, hours: float) -> None:
         print(f"{ts} {r['type']:<15s} {r['ticker'] or '-':30s} {r['payload'][:120]}")
 
 
+def report_divergence(conn: sqlite3.Connection, hours: float) -> None:
+    since = _since_ms(hours)
+    rows = conn.execute(
+        """SELECT kalshi_ticker, polymarket_slug,
+                  COUNT(divergence) n,
+                  AVG(divergence) avg_div,
+                  AVG(ABS(divergence)) avg_abs,
+                  MAX(ABS(divergence)) max_abs,
+                  AVG(CASE WHEN ABS(divergence) >= 0.02 THEN 1.0 ELSE 0.0 END) pct_2c,
+                  AVG(CASE WHEN ABS(divergence) >= 0.05 THEN 1.0 ELSE 0.0 END) pct_5c
+           FROM venue_marks WHERE ts_ms >= ? AND divergence IS NOT NULL
+           GROUP BY kalshi_ticker, polymarket_slug ORDER BY avg_abs DESC""",
+        (since,),
+    ).fetchall()
+    if not rows:
+        print(f"no cross-venue marks in the last {hours:g}h — is `bacchus-mm crossvenue` running?")
+        return
+    print(f"== kalshi vs polymarket divergence (last {hours:g}h) ==")
+    print(f"{'kalshi':32s} {'n':>5s} {'avg':>7s} {'avg|d|':>7s} {'max|d|':>7s} {'>=2c':>6s} {'>=5c':>6s}")
+    for r in rows:
+        print(
+            f"{r['kalshi_ticker']:32s} {r['n']:5d} {r['avg_div']:+7.3f} {r['avg_abs']:7.3f}"
+            f" {r['max_abs']:7.3f} {r['pct_2c']*100:5.1f}% {r['pct_5c']*100:5.1f}%"
+        )
+        last = conn.execute(
+            "SELECT kalshi_bid, kalshi_ask, pm_bid, pm_ask, divergence FROM venue_marks"
+            " WHERE kalshi_ticker = ? AND divergence IS NOT NULL ORDER BY ts_ms DESC LIMIT 1",
+            (r["kalshi_ticker"],),
+        ).fetchone()
+        if last:
+            print(
+                f"  now: kalshi {last['kalshi_bid']}/{last['kalshi_ask']}"
+                f"  pm {last['pm_bid']}/{last['pm_ask']}  div {last['divergence']:+.3f}"
+                f"  ({r['polymarket_slug']})"
+            )
+    print("\ndivergence = pm_mid - kalshi_mid (yes side). avg sign shows which venue prices higher;")
+    print("sustained |d| above your round-trip cost is the Phase B/C signal.")
+
+
 def run_report(data_dir: Path, report: str, hours: float) -> None:
     conn = _connect(data_dir)
     try:
@@ -159,6 +198,7 @@ def run_report(data_dir: Path, report: str, hours: float) -> None:
             "markouts": report_markouts,
             "quotes": report_quotes,
             "incidents": report_incidents,
+            "divergence": report_divergence,
         }[report](conn, hours)
     finally:
         conn.close()

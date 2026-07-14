@@ -50,6 +50,13 @@ uv run bacchus-mm analyze summary
 uv run bacchus-mm analyze markouts
 uv run bacchus-mm analyze quotes
 uv run bacchus-mm analyze incidents
+
+# 6. Cross-venue (optional, no credentials — Polymarket data is public):
+#    map pairs in config.local.yaml (find slugs with pm-find), then record
+#    divergence between venues. See ROADMAP.md for where this is heading.
+uv run bacchus-mm pm-find "fed"
+uv run bacchus-mm crossvenue
+uv run bacchus-mm analyze divergence
 ```
 
 Going live on prod requires **both** `live.enabled: true` in `config.local.yaml`

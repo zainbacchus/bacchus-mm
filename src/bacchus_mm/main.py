@@ -221,6 +221,47 @@ async def cmd_trade(cfg: Config, live: bool, dry_run: bool) -> None:
         await ex.close()
 
 
+async def cmd_crossvenue(cfg: Config) -> None:
+    from .crossvenue import VenuePair, run_recorder
+
+    raw = cfg.raw.get("crossvenue", {}) or {}
+    pairs = [VenuePair.from_config(p) for p in raw.get("pairs", [])]
+    if not pairs:
+        sys.exit(
+            "No pairs configured. Add a crossvenue: section to config.local.yaml —\n"
+            "see src/bacchus_mm/crossvenue.py for the format, and use\n"
+            "`bacchus-mm pm-find \"cpi\"` to look up Polymarket slugs."
+        )
+    ex = _build_exchange(cfg, need_auth=False)
+    session_id = f"xv-{time.strftime('%Y%m%d-%H%M%S')}"
+    events = EventLog(cfg.data_dir, session_id)
+    log.info("cross-venue recorder: %d pairs, poll every %ss", len(pairs), raw.get("poll_seconds", 15))
+    try:
+        await run_recorder(pairs, ex, events, float(raw.get("poll_seconds", 15)))
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        pass
+    finally:
+        events.close()
+        await ex.close()
+
+
+async def cmd_pm_find(query: str) -> None:
+    from .exchange.polymarket import PolymarketData
+
+    pm = PolymarketData()
+    try:
+        matches = await pm.find_markets(query)
+        if not matches:
+            print(f"no active Polymarket markets matching {query!r} in the top-volume set")
+            return
+        for m in matches[:20]:
+            print(f"{m.slug}")
+            print(f"  {m.question}")
+            print(f"  outcomes={m.outcomes} vol24h=${m.volume_24h:,.0f} ends={m.end_date}")
+    finally:
+        await pm.close()
+
+
 async def cmd_cancel_all(cfg: Config) -> None:
     ex = _build_exchange(cfg, need_auth=True)
     try:
@@ -252,9 +293,12 @@ def cli() -> None:
     run_p.add_argument("--live", action="store_true", help="required (with live.enabled) for prod")
     sub.add_parser("cancel-all", help="cancel all resting orders")
     sub.add_parser("halt-clear", help="acknowledge a kill-switch halt")
+    sub.add_parser("crossvenue", help="record kalshi vs polymarket divergence for mapped pairs")
+    pf = sub.add_parser("pm-find", help="search active Polymarket markets to build pair mappings")
+    pf.add_argument("query")
     an = sub.add_parser("analyze", help="log analysis reports")
     an.add_argument("report", nargs="?", default="summary",
-                    choices=["summary", "markouts", "quotes", "incidents"])
+                    choices=["summary", "markouts", "quotes", "incidents", "divergence"])
     an.add_argument("--hours", type=float, default=24.0)
 
     args = parser.parse_args()
@@ -272,6 +316,10 @@ def cli() -> None:
         asyncio.run(cmd_trade(cfg, live=False, dry_run=True))
     elif args.command == "run":
         asyncio.run(cmd_trade(cfg, live=args.live, dry_run=False))
+    elif args.command == "crossvenue":
+        asyncio.run(cmd_crossvenue(cfg))
+    elif args.command == "pm-find":
+        asyncio.run(cmd_pm_find(args.query))
     elif args.command == "cancel-all":
         asyncio.run(cmd_cancel_all(cfg))
     elif args.command == "halt-clear":

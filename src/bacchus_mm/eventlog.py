@@ -50,6 +50,15 @@ CREATE TABLE IF NOT EXISTS mids (
     ask REAL
 );
 CREATE INDEX IF NOT EXISTS idx_mids_ticker_ts ON mids(ticker, ts_ms);
+CREATE TABLE IF NOT EXISTS venue_marks (
+    ts_ms INTEGER NOT NULL,
+    kalshi_ticker TEXT NOT NULL,
+    polymarket_slug TEXT NOT NULL,
+    kalshi_bid REAL, kalshi_ask REAL,
+    pm_bid REAL, pm_ask REAL,
+    divergence REAL
+);
+CREATE INDEX IF NOT EXISTS idx_venue_marks ON venue_marks(kalshi_ticker, ts_ms);
 CREATE TABLE IF NOT EXISTS pnl_marks (
     ts_ms INTEGER NOT NULL,
     session_id TEXT NOT NULL,
@@ -159,6 +168,35 @@ class EventLog:
                 float(mid),
                 float(bid) if bid is not None else None,
                 float(ask) if ask is not None else None,
+            ),
+        )
+        self.db.commit()
+
+    def record_venue_mark(
+        self,
+        kalshi_ticker: str,
+        polymarket_slug: str,
+        kalshi_bid: Optional[Decimal],
+        kalshi_ask: Optional[Decimal],
+        pm_bid: Optional[Decimal],
+        pm_ask: Optional[Decimal],
+        divergence: Optional[Decimal],
+    ) -> None:
+        def f(v: Optional[Decimal]):
+            return float(v) if v is not None else None
+
+        self.db.execute(
+            "INSERT INTO venue_marks (ts_ms, kalshi_ticker, polymarket_slug, kalshi_bid,"
+            " kalshi_ask, pm_bid, pm_ask, divergence) VALUES (?,?,?,?,?,?,?,?)",
+            (
+                int(time.time() * 1000),
+                kalshi_ticker,
+                polymarket_slug,
+                f(kalshi_bid),
+                f(kalshi_ask),
+                f(pm_bid),
+                f(pm_ask),
+                f(divergence),
             ),
         )
         self.db.commit()
