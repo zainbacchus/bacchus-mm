@@ -21,6 +21,7 @@ import uuid
 from pathlib import Path
 
 from .config import Config
+from .crossvenue import VenuePair, run_recorder
 from .eventlog import EventLog
 from .exchange.base import Fill
 from .exchange.kalshi import KalshiAuth, KalshiExchange
@@ -194,6 +195,18 @@ async def cmd_trade(cfg: Config, live: bool, dry_run: bool) -> None:
         tasks.append(asyncio.create_task(risk_loop()))
         tasks += [asyncio.create_task(w.run()) for w in workers.values()]
 
+        # Cross-venue recorder rides along whenever pairs are configured — one
+        # command ingests everything. `bacchus-mm crossvenue` still runs it alone.
+        xv = cfg.raw.get("crossvenue", {}) or {}
+        xv_pairs = [VenuePair.from_config(p) for p in xv.get("pairs", [])]
+        if xv_pairs:
+            log.info("cross-venue recorder attached: %d pairs", len(xv_pairs))
+            tasks.append(
+                asyncio.create_task(
+                    run_recorder(xv_pairs, ex, events, float(xv.get("poll_seconds", 15)))
+                )
+            )
+
         await stop_event.wait()
         log.info("shutting down…")
     finally:
@@ -222,8 +235,6 @@ async def cmd_trade(cfg: Config, live: bool, dry_run: bool) -> None:
 
 
 async def cmd_crossvenue(cfg: Config) -> None:
-    from .crossvenue import VenuePair, run_recorder
-
     raw = cfg.raw.get("crossvenue", {}) or {}
     pairs = [VenuePair.from_config(p) for p in raw.get("pairs", [])]
     if not pairs:
