@@ -49,11 +49,12 @@ def _build_exchange(cfg: Config, need_auth: bool) -> KalshiExchange:
     creds = cfg.credentials()
     auth = None
     if creds.present:
-        auth = KalshiAuth.from_files(creds.key_id, creds.private_key_path)
+        auth = KalshiAuth(creds.key_id, creds.private_key_pem())
     elif need_auth:
         sys.exit(
-            "Missing credentials: set KALSHI_API_KEY_ID and KALSHI_PRIVATE_KEY_PATH "
-            "(see .env.example). Demo keys come from demo.kalshi.co account settings."
+            "Missing credentials: set KALSHI_API_KEY_ID plus KALSHI_PRIVATE_KEY_PATH "
+            "or KALSHI_PRIVATE_KEY (see .env.example). Demo keys come from "
+            "demo.kalshi.co account settings."
         )
     return KalshiExchange(
         env=cfg.env, auth=auth, write_tokens_per_second=cfg.write_tokens_per_second

@@ -39,10 +39,19 @@ def _dec(section: dict, key: str, default: Decimal) -> Decimal:
 class Credentials:
     key_id: Optional[str]
     private_key_path: Optional[str]
+    private_key_inline: Optional[str]
 
     @property
     def present(self) -> bool:
-        return bool(self.key_id and self.private_key_path)
+        return bool(self.key_id and (self.private_key_path or self.private_key_inline))
+
+    def private_key_pem(self) -> bytes:
+        """Inline key wins over path. Inline values may carry literal \\n escapes
+        (the one-line .env convention for multi-line PEMs)."""
+        if self.private_key_inline:
+            return self.private_key_inline.replace("\\n", "\n").encode()
+        with open(self.private_key_path, "rb") as f:
+            return f.read()
 
 
 @dataclass
@@ -128,4 +137,5 @@ class Config:
         return Credentials(
             key_id=os.environ.get("KALSHI_API_KEY_ID"),
             private_key_path=os.environ.get("KALSHI_PRIVATE_KEY_PATH"),
+            private_key_inline=os.environ.get("KALSHI_PRIVATE_KEY"),
         )

@@ -35,6 +35,32 @@ def test_auth_signature_verifies():
     )  # raises on mismatch
 
 
+def test_inline_private_key_with_escaped_newlines(monkeypatch):
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    pem = key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    ).decode()
+    from bacchus_mm.config import Credentials
+
+    creds = Credentials(
+        key_id="k",
+        private_key_path=None,
+        private_key_inline=pem.rstrip("\n").replace("\n", "\\n"),
+    )
+    assert creds.present
+    auth = KalshiAuth(creds.key_id, creds.private_key_pem())
+    assert auth.headers("GET", "/x")["KALSHI-ACCESS-KEY"] == "k"
+
+
+def test_inline_key_wins_over_path():
+    from bacchus_mm.config import Credentials
+
+    creds = Credentials(key_id="k", private_key_path="/nonexistent", private_key_inline=None)
+    assert creds.present  # path variant present even though file check happens later
+
+
 def test_price_and_count_formatting():
     assert _fmt_price(Decimal("0.56")) == "0.5600"
     assert _fmt_price(Decimal("0.05")) == "0.0500"
