@@ -1,9 +1,12 @@
 # bacchus-mm
 
-An open-source market-making bot for [Kalshi](https://kalshi.com) prediction markets,
-built around one idea: **every decision is logged with enough context that an LLM
-(or a human) can reconstruct and critique it later.** You run the bot; your logs
-become the dataset you iterate on.
+An open-source market-making bot for prediction markets — quoting on
+[Kalshi](https://kalshi.com), with [Polymarket US](https://polymarket.com) as a
+second data venue for cross-venue divergence tracking (and, per
+[ROADMAP.md](ROADMAP.md), an eventual fair-value signal and execution venue).
+Built around one idea: **every decision is logged with enough context that an
+LLM (or a human) can reconstruct and critique it later.** You run the bot; your
+logs become the dataset you iterate on.
 
 ## How it works
 
@@ -22,6 +25,12 @@ become the dataset you iterate on.
   refuses to restart until you acknowledge with `halt-clear`; plus a Kalshi
   order-group so the *exchange* cancels all orders if fills exceed a rolling
   15-second contract limit (protection that works even if the bot is wedged).
+- **Cross-venue (Polymarket US)** — manually-mapped Kalshi ↔ Polymarket market
+  pairs are polled side by side (public data, no credentials) into a
+  `venue_marks` table; `analyze divergence` shows how often and how far the
+  venues disagree. The recorder attaches automatically to `observe`/`run`
+  whenever pairs are configured. Trading credentials
+  (`scripts/add-polymarket-key.sh`) are stored but unused until Phase C.
 - **Logs** — JSONL event stream + SQLite mirror in `data/`: every quote decision
   (with book top, inventory, sigma, reservation price), order event, fill (with
   mid-at-fill), mid marks, and a PnL curve. `bacchus-mm analyze markouts` computes
@@ -60,7 +69,9 @@ uv run bacchus-mm analyze divergence
 ```
 
 Going live on prod requires **both** `live.enabled: true` in `config.local.yaml`
-and the `--live` flag — a two-key deliberate action, never a default.
+and the `--live` flag — a two-key deliberate action, never a default. Before the
+first live run, `bacchus-mm selftest --live` proves the order plumbing with a
+single 1-contract $0.01 post-only round trip (place → rest → cancel → verify).
 
 ## Configuration
 
