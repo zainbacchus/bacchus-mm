@@ -30,6 +30,29 @@ Hard prerequisites before any of this:
 - separate capital/risk caps and kill switch for the PM leg;
 - proof from Phase A logs that gaps persist longer than our reaction time.
 
+## External data ladder (evaluate in this order; every signal ships in
+## shadow mode — logged next to quote decisions, judged against markouts —
+## before it may influence quoting)
+
+1. **Release calendars** — pull/widen quotes around scheduled data drops
+   (CPI, retail sales, weather observation times). Cheapest, likely the
+   biggest adverse-selection reduction available.
+2. **Cross-venue prices** — Phase A/B; generic staleness alarm.
+3. **Domain fair-value anchors** — CME FedWatch for Fed markets, Cleveland
+   Fed nowcast for CPI, NWS forecasts for weather. Slow but grounding.
+4. News/sentiment feeds — deliberately out of scope (latency game we lose).
+
+## Strategy candidates beyond single-level A-S (post-proof, in rough order)
+
+- **Intra-Kalshi structural consistency** — strike ladders must be monotonic,
+  partition outcomes must sum to ~$1; quote legs against siblings. Same
+  exchange, same resolution rules, so no cross-venue basis risk. Likely the
+  best risk-adjusted expansion, ahead of Phase C.
+- **Queue-aware quoting** — Kalshi exposes order queue position; keep/replace
+  decisions should know whether we're near the front.
+- **Multi-level laddering** — 2-3 levels per side once single-level earns.
+- Settlement scalping (97-99c near-certainties): rejected — tail risk.
+
 ## Also queued
 
 - Raise `selector.min_hours_to_close` if same-day settlement markets (daily
