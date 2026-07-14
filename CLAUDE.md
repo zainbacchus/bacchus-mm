@@ -56,8 +56,9 @@ decision: go live tiny, or fix and observe another day.
    magnitude on the Fed pairs; this gates Phase B design (see ROADMAP.md).
 
 Output of the review: a short written verdict per gate + ONE recommendation:
-(a) go live (`live.enabled: true` + `run --live`) with reduced size —
-quote_size 1-2, max 2-3 markets, kill switch $250 already set — or
+(a) go live with reduced size — quote_size 1-2, max 2-3 markets, kill switch
+$250 already set. Sequence: set `live.enabled: true`, run `selftest --live`
+(1-cent order round trip MUST pass first), then `run --live` — or
 (b) specific config/code fixes and one more observe day. Bias small and live:
 real fills are the only data that answers the expectancy question.
 
