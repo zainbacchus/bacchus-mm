@@ -1,0 +1,57 @@
+# Public defaults. Override anything here in config.local.yaml (gitignored) —
+# that's where tuned parameters live so they don't ship with the repo.
+# Credentials NEVER go in config files; see .env.example.
+
+env: demo # demo | prod (env var KALSHI_ENV overrides)
+
+live:
+  # Both this AND the --live CLI flag are required to place orders on prod.
+  enabled: false
+
+exchange:
+  # Kalshi Basic tier allows 100 write tokens/s (order=10, cancel=2).
+  # We self-limit well below that.
+  write_tokens_per_second: 50
+
+selector:
+  # Calm categories only: news-driven categories (sports, crypto prices) will
+  # pick off a slow market maker. Category names must match Kalshi series categories.
+  categories:
+    - Economics
+    - Climate and Weather
+  ticker_blocklist: [] # regexes matched against market/event tickers
+  min_volume_24h: 500 # contracts
+  min_spread: 0.02 # dollars; narrower pays too little
+  max_spread: 0.15 # wider usually means a dead or toxic market
+  min_price: 0.10 # stay out of the tails: asymmetric payoff risk
+  max_price: 0.90
+  min_hours_to_close: 12
+  max_markets: 6
+  volume_weight: 0.35
+  spread_weight: 0.65
+  refresh_minutes: 30
+
+strategy:
+  # Avellaneda-Stoikov parameters — see src/bacchus_mm/strategy/avellaneda_stoikov.py
+  gamma: 0.3 # inventory risk aversion (higher = skews quotes harder)
+  k: 1.5 # fill intensity (higher = tighter optimal spread)
+  horizon_seconds: 3600
+  sigma_floor: 0.004 # per-sqrt-second mid vol floor
+  sigma_halflife_seconds: 600
+  min_half_spread: 0.01
+  max_half_spread: 0.05
+  quote_size: 5 # contracts per side
+  requote_min_interval: 1.0 # seconds between requote evaluations per market
+  requote_tolerance: 0.01 # don't churn orders for < 1 tick of movement
+  order_ttl_seconds: 900 # exchange-side expiry: orphaned orders die on their own
+  tick: 0.01
+
+risk:
+  max_contracts_per_market: 20
+  max_notional_per_market: 100 # dollars of worst-case exposure per market
+  max_gross_notional: 600 # dollars across all markets
+  kill_switch_drawdown: 250 # halt everything at this drawdown from session high
+  order_group_contracts_per_15s: 40 # exchange-side runaway limit (Kalshi order group)
+
+logging:
+  dir: data

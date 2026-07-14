@@ -1,0 +1,17 @@
+# secrets & tuned parameters
+.env
+config.local.yaml
+*.pem
+*.key
+
+# runtime state & logs
+data/
+
+# python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+dist/
+*.egg-info/
