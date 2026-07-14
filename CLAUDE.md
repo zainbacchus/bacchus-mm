@@ -33,6 +33,34 @@ compatible.
   `halt-clear` command is a deliberate human action.
 - Risk caps are checked in `RiskManager.approve_order` before every placement.
 
+## First review playbook ("run the first review")
+
+Context: the bot has been running in observe mode (dry_run — quote decisions
+logged, no orders, therefore NO fills; summary/markouts will be empty. That is
+expected, not a bug). The review's job is to clear three gates and produce one
+decision: go live tiny, or fix and observe another day.
+
+1. **Ops gate** — `analyze incidents --hours 24`: any crashes, error bursts,
+   or gaps? Check for overnight holes in `mids` (Mac sleep) and ws reconnect
+   loops. Both feeds (events + venue_marks) should be continuous.
+2. **Quote-sanity gate** — `analyze quotes --hours 24`, then pull a sample of
+   `quote_decision` events per market from the events table: are our would-be
+   quotes inside sane bounds (never crossing the book, spreads >= min after
+   fees, sigma not pinned at floor or exploding)? Would we have been run over
+   anywhere — check markets that moved >5c in a minute and what our standing
+   quote would have been.
+3. **Market-behavior gate** — which selected markets gapped around data
+   releases or settlement? Did any same-day-settlement market get picked?
+   Feed this into selector filters (`min_hours_to_close`, categories).
+4. **Cross-venue read** — `analyze divergence --hours 24`: lead/lag and
+   magnitude on the Fed pairs; this gates Phase B design (see ROADMAP.md).
+
+Output of the review: a short written verdict per gate + ONE recommendation:
+(a) go live (`live.enabled: true` + `run --live`) with reduced size —
+quote_size 1-2, max 2-3 markets, kill switch $250 already set — or
+(b) specific config/code fixes and one more observe day. Bias small and live:
+real fills are the only data that answers the expectancy question.
+
 ## Conventions
 
 - Prices: Decimal dollars in [0,1] on the YES side. Positions: signed
