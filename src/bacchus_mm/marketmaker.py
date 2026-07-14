@@ -29,7 +29,7 @@ class WorkerConfig:
     requote_min_interval: float = 1.0
     requote_tolerance: Decimal = Decimal("0.01")
     order_ttl_seconds: int = 900
-    mid_mark_interval: float = 60.0
+    mid_mark_interval: float = 15.0
 
 
 class MarketWorker:

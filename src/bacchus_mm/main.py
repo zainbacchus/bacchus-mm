@@ -273,6 +273,61 @@ async def cmd_pm_find(query: str) -> None:
         await pm.close()
 
 
+async def cmd_selftest(cfg: Config, live: bool) -> None:
+    """Order-plumbing proof: place a 1-contract post-only bid at $0.01 on the
+    most liquid selected market, confirm it rests, cancel it, confirm it's gone.
+    Worst case cost if somehow filled: one cent. Gated like `run`."""
+    from decimal import Decimal
+
+    from .exchange.base import Side
+    from .exchange.kalshi import new_client_order_id
+
+    if cfg.env == "prod" and not (cfg.live_enabled and live):
+        sys.exit(
+            "selftest places a real (1-contract, $0.01) order: set live.enabled: true "
+            "in config.local.yaml AND pass --live."
+        )
+    ex = _build_exchange(cfg, need_auth=True)
+    events = EventLog(cfg.data_dir, f"selftest-{time.strftime('%Y%m%d-%H%M%S')}")
+    try:
+        markets = await ex.list_markets()
+        picks = select_markets(markets, cfg.selector)
+        if not picks:
+            sys.exit("selector found no markets to test against")
+        ticker = picks[0].market.ticker
+        print(f"placing 1 @ $0.01 post-only bid on {ticker} …")
+        order = await ex.create_order(
+            ticker=ticker,
+            side=Side.BID,
+            price=Decimal("0.01"),
+            count=1,
+            client_order_id=new_client_order_id(),
+            expiration_seconds=120,
+        )
+        events.emit("selftest_order_placed", ticker=ticker, order_id=order.order_id)
+        print(f"  placed: {order.order_id} (status {order.status})")
+
+        await asyncio.sleep(2)
+        resting = {o.order_id for o in await ex.get_resting_orders()}
+        if order.order_id not in resting:
+            events.emit("selftest_failed", ticker=ticker, reason="order not resting")
+            sys.exit("FAIL: order not found resting after placement — investigate before go-live")
+        print("  confirmed resting on the book")
+
+        await ex.cancel_order(order.order_id)
+        await asyncio.sleep(2)
+        resting = {o.order_id for o in await ex.get_resting_orders()}
+        if order.order_id in resting:
+            events.emit("selftest_failed", ticker=ticker, reason="order still resting after cancel")
+            sys.exit("FAIL: cancel did not remove the order — CHECK THE EXCHANGE UI")
+        events.emit("selftest_passed", ticker=ticker, order_id=order.order_id)
+        print("  canceled and confirmed gone.")
+        print("PASS: create -> rest -> cancel round trip verified. Order plumbing is live-ready.")
+    finally:
+        events.close()
+        await ex.close()
+
+
 async def cmd_cancel_all(cfg: Config) -> None:
     ex = _build_exchange(cfg, need_auth=True)
     try:
@@ -304,6 +359,8 @@ def cli() -> None:
     run_p.add_argument("--live", action="store_true", help="required (with live.enabled) for prod")
     sub.add_parser("cancel-all", help="cancel all resting orders")
     sub.add_parser("halt-clear", help="acknowledge a kill-switch halt")
+    st = sub.add_parser("selftest", help="1-cent order round-trip plumbing test (gated like run)")
+    st.add_argument("--live", action="store_true")
     sub.add_parser("crossvenue", help="record kalshi vs polymarket divergence for mapped pairs")
     pf = sub.add_parser("pm-find", help="search active Polymarket markets to build pair mappings")
     pf.add_argument("query")
@@ -335,6 +392,8 @@ def cli() -> None:
         asyncio.run(cmd_cancel_all(cfg))
     elif args.command == "halt-clear":
         cmd_halt_clear(cfg)
+    elif args.command == "selftest":
+        asyncio.run(cmd_selftest(cfg, live=args.live))
     elif args.command == "analyze":
         from .analyze import run_report
 
