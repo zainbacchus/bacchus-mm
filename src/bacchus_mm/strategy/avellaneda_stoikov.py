@@ -27,7 +27,10 @@ from typing import Optional
 @dataclass
 class StrategyParams:
     gamma: float = 0.3
-    k: float = 1.5
+    # k calibrated so the constant spread term ln(1+gamma/k)/gamma ≈ $0.02.
+    # (First-review finding: k=1.5 made that term ~$0.61, so the half-spread
+    # was pinned at max_half_spread all day and never adapted to volatility.)
+    k: float = 50.0
     horizon_seconds: float = 3600.0
     sigma_floor: float = 0.004
     sigma_halflife_seconds: float = 600.0

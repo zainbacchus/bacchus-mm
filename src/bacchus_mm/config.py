@@ -100,7 +100,7 @@ class Config:
         )
         strategy = StrategyParams(
             gamma=float(stra.get("gamma", 0.3)),
-            k=float(stra.get("k", 1.5)),
+            k=float(stra.get("k", 50.0)),
             horizon_seconds=float(stra.get("horizon_seconds", 3600)),
             sigma_floor=float(stra.get("sigma_floor", 0.004)),
             sigma_halflife_seconds=float(stra.get("sigma_halflife_seconds", 600)),

@@ -34,7 +34,7 @@ selector:
 strategy:
   # Avellaneda-Stoikov parameters — see src/bacchus_mm/strategy/avellaneda_stoikov.py
   gamma: 0.3 # inventory risk aversion (higher = skews quotes harder)
-  k: 1.5 # fill intensity (higher = tighter optimal spread)
+  k: 50 # fill intensity; calibrated so base half-spread ~= 2c (higher = tighter)
   horizon_seconds: 3600
   sigma_floor: 0.004 # per-sqrt-second mid vol floor
   sigma_halflife_seconds: 600
