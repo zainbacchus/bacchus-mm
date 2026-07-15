@@ -69,3 +69,9 @@ Hard prerequisites before any of this:
 - Order amend instead of cancel/replace where it saves rate-limit tokens.
 - Settlement handling mid-session (positions in settled markets currently
   just stop marking).
+- Orphan-position management: when the selector drops a market we still hold
+  (first case 2026-07-15: +1 KXPCECORE after fills), no worker quotes the exit
+  — position rides to settlement unless manually closed. Consider a wind-down
+  worker that keeps a reduce-only ask on dropped positions.
+- In-session selector refresh (config has refresh_minutes but markets are
+  currently fixed at session start; miscategorized picks persist until restart).
