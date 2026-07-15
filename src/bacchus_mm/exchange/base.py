@@ -54,6 +54,7 @@ class Order:
     price: Decimal
     count: int
     status: str = "resting"
+    placed_monotonic: float = 0.0  # local clock at placement, for TTL-aware refresh
 
 
 @dataclass

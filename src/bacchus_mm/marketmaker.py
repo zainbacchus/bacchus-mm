@@ -77,7 +77,12 @@ class MarketWorker:
 
     async def run(self) -> None:
         while not self._stopped:
-            await self._dirty.wait()
+            # Wake on book changes, but also tick periodically so TTL-refresh
+            # happens even when a market goes completely silent.
+            try:
+                await asyncio.wait_for(self._dirty.wait(), timeout=60)
+            except asyncio.TimeoutError:
+                pass
             self._dirty.clear()
             wait = self.cfg.requote_min_interval - (time.monotonic() - self._last_requote)
             if wait > 0:
@@ -133,8 +138,15 @@ class MarketWorker:
     ) -> Optional[Order]:
         if self.dry_run:
             return None
-        keep = (
+        # Refresh before the exchange-side TTL kills the order: past ~80% of its
+        # life we re-place even at an unchanged price, otherwise a quiet market
+        # leaves us holding a reference to an expired order and quoting nothing.
+        fresh = (
             existing is not None
+            and time.monotonic() - existing.placed_monotonic < self.cfg.order_ttl_seconds * 0.8
+        )
+        keep = (
+            fresh
             and price is not None
             and abs(existing.price - price) < self.cfg.requote_tolerance
             and existing.count == size
@@ -171,6 +183,7 @@ class MarketWorker:
                 client_order_id=new_client_order_id(),
                 expiration_seconds=self.cfg.order_ttl_seconds,
             )
+            order.placed_monotonic = time.monotonic()
             self.events.emit(
                 "order_placed", ticker=self.ticker, side=side.value,
                 order_id=order.order_id, price=price, size=size,
