@@ -67,6 +67,9 @@ class Config:
     requote_min_interval: float
     requote_tolerance: Decimal
     order_ttl_seconds: int
+    fast_move_threshold: Decimal
+    fast_move_window: float
+    fast_move_cooloff: float
     selector_refresh_minutes: int
     raw: dict = field(repr=False, default_factory=dict)
 
@@ -129,6 +132,9 @@ class Config:
             requote_min_interval=float(stra.get("requote_min_interval", 1.0)),
             requote_tolerance=_dec(stra, "requote_tolerance", Decimal("0.01")),
             order_ttl_seconds=int(stra.get("order_ttl_seconds", 900)),
+            fast_move_threshold=_dec(stra, "fast_move_threshold", Decimal("0.03")),
+            fast_move_window=float(stra.get("fast_move_window", 30)),
+            fast_move_cooloff=float(stra.get("fast_move_cooloff", 180)),
             selector_refresh_minutes=int(sel.get("refresh_minutes", 30)),
             raw=data,
         )

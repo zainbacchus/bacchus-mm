@@ -25,7 +25,10 @@ Spread survey 2026-07-15: PM's econ-adjacent books are TIGHTER than ours
 nonzero maker/taker base-fee fields), and only ~8 econ markets clear 1k/24h
 volume in the top 400. MM there is unattractive for our categories; Kalshi's
 coarse-tick niche books are the less-competed venue. Re-survey before
-building this phase. (Also: PM's 0.1c ticks make small cross-venue
+building this phase. Correction 2026-07-15 pm: PM does carry weather/temp
+(~18k/day vol, but same-day-settlement — our banned category), tech/AI and
+culture markets; conclusion unchanged since none pass our own risk rules
+with better economics than Kalshi's niche books. (Also: PM's 0.1c ticks make small cross-venue
 "divergence" partly tick-granularity artifact.)
 
 Trade on Polymarket US (credentials via `scripts/add-polymarket-key.sh`):

@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections import deque
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Optional
@@ -30,6 +31,38 @@ class WorkerConfig:
     requote_tolerance: Decimal = Decimal("0.01")
     order_ttl_seconds: int = 900
     mid_mark_interval: float = 15.0
+    fast_move_threshold: Decimal = Decimal("0.03")
+    fast_move_window: float = 30.0
+    fast_move_cooloff: float = 180.0
+
+
+class FastMoveGuard:
+    """Regime-shift circuit breaker. The EWMA sigma reacts over minutes; a
+    sudden repricing (data release, news) picks off resting quotes long before
+    sigma widens them. If the mid moves >= threshold within the window, block
+    quoting for a cool-off period — stand aside, don't catch the knife.
+
+    Motivated by the first live fills (2026-07-15): a bid filled at $0.40
+    seconds into a collapse to $0.14 accounted for all realized losses."""
+
+    def __init__(self, threshold: Decimal, window_s: float, cooloff_s: float):
+        self.threshold = threshold
+        self.window = window_s
+        self.cooloff = cooloff_s
+        self._hist: deque[tuple[float, Decimal]] = deque()
+        self._blocked_until = 0.0
+
+    def update(self, mid: Decimal, ts: Optional[float] = None) -> None:
+        now = ts if ts is not None else time.monotonic()
+        self._hist.append((now, mid))
+        while self._hist and now - self._hist[0][0] > self.window:
+            self._hist.popleft()
+        if abs(mid - self._hist[0][1]) >= self.threshold:
+            self._blocked_until = now + self.cooloff
+
+    def blocked(self, ts: Optional[float] = None) -> bool:
+        now = ts if ts is not None else time.monotonic()
+        return now < self._blocked_until
 
 
 class MarketWorker:
@@ -51,6 +84,8 @@ class MarketWorker:
         self.cfg = cfg
         self.dry_run = dry_run
         self.vol = VolEstimator(strategy.sigma_halflife_seconds, strategy.sigma_floor)
+        self.guard = FastMoveGuard(cfg.fast_move_threshold, cfg.fast_move_window, cfg.fast_move_cooloff)
+        self._guard_announced = False
         self.top: Optional[BookTop] = None
         self.bid_order: Optional[Order] = None
         self.ask_order: Optional[Order] = None
@@ -65,6 +100,7 @@ class MarketWorker:
         mid = top.mid
         if mid is not None:
             self.vol.update(mid)
+            self.guard.update(mid)
             self.risk.on_mid(self.ticker, mid)
             now = time.monotonic()
             if now - self._last_mid_mark >= self.cfg.mid_mark_interval:
@@ -101,6 +137,18 @@ class MarketWorker:
         top = self.top
         if top is None or top.mid is None:
             return
+        if self.guard.blocked():
+            if not self._guard_announced:
+                self.events.emit(
+                    "quotes_pulled", ticker=self.ticker, reason="fast_move",
+                    mid=top.mid, cooloff=self.cfg.fast_move_cooloff,
+                )
+                self._guard_announced = True
+            self.bid_order = await self._reconcile(Side.BID, self.bid_order, None, 0)
+            self.ask_order = await self._reconcile(Side.ASK, self.ask_order, None, 0)
+            self._dirty.set()  # keep ticking so we resume when the cool-off ends
+            return
+        self._guard_announced = False
         mid = top.mid
         inventory = self.risk.markets.get(self.ticker)
         q = inventory.position if inventory else 0

@@ -45,6 +45,12 @@ strategy:
   requote_tolerance: 0.01 # don't churn orders for < 1 tick of movement
   order_ttl_seconds: 900 # exchange-side expiry: orphaned orders die on their own
   tick: 0.01
+  # Regime-shift circuit breaker: if the mid moves >= threshold within the
+  # window, pull all quotes and stand aside for the cool-off. Motivated by
+  # first live fills — a resting bid filled seconds into a 26c collapse.
+  fast_move_threshold: 0.03
+  fast_move_window: 30 # seconds
+  fast_move_cooloff: 180 # seconds
 
 risk:
   max_contracts_per_market: 20
