@@ -54,10 +54,13 @@ class FastMoveGuard:
 
     def update(self, mid: Decimal, ts: Optional[float] = None) -> None:
         now = ts if ts is not None else time.monotonic()
+        # A single-step gap >= threshold is always a shock, even if the previous
+        # update is older than the window (sparse books gap between ticks).
+        last_mid = self._hist[-1][1] if self._hist else mid
         self._hist.append((now, mid))
         while self._hist and now - self._hist[0][0] > self.window:
             self._hist.popleft()
-        if abs(mid - self._hist[0][1]) >= self.threshold:
+        if abs(mid - self._hist[0][1]) >= self.threshold or abs(mid - last_mid) >= self.threshold:
             self._blocked_until = now + self.cooloff
 
     def blocked(self, ts: Optional[float] = None) -> bool:
