@@ -331,6 +331,34 @@ async def cmd_selftest(cfg: Config, live: bool) -> None:
         await ex.close()
 
 
+async def cmd_equity(cfg: Config) -> None:
+    """True mark-to-market across sessions: free cash + position values from the
+    exchange, marked at the latest logged mids. Survives restarts, unlike the
+    session-rebased pnl_marks."""
+    import sqlite3
+    from decimal import Decimal
+
+    ex = _build_exchange(cfg, need_auth=True)
+    try:
+        balance = await ex.get_balance()
+        positions = await ex.get_positions()
+        db = sqlite3.connect(cfg.data_dir / "bacchus.db")
+        equity = balance
+        print(f"free cash:              ${balance:.2f}")
+        for ticker, pos in sorted(positions.items()):
+            row = db.execute(
+                "SELECT mid FROM mids WHERE ticker=? ORDER BY ts_ms DESC LIMIT 1", (ticker,)
+            ).fetchone()
+            mid = Decimal(str(row[0])) if row else Decimal("0.5")
+            mark = "" if row else " (no logged mid; marked at 0.50)"
+            value = pos * mid if pos > 0 else abs(pos) * (1 - mid)
+            equity += value
+            print(f"  {ticker:36s} {pos:+4d} @ mid {mid}  -> ${value:.2f}{mark}")
+        print(f"equity:                 ${equity:.2f}")
+    finally:
+        await ex.close()
+
+
 async def cmd_cancel_all(cfg: Config) -> None:
     ex = _build_exchange(cfg, need_auth=True)
     try:
@@ -361,6 +389,7 @@ def cli() -> None:
     run_p = sub.add_parser("run", help="trade")
     run_p.add_argument("--live", action="store_true", help="required (with live.enabled) for prod")
     sub.add_parser("cancel-all", help="cancel all resting orders")
+    sub.add_parser("equity", help="true mark-to-market: cash + positions at latest mids")
     sub.add_parser("halt-clear", help="acknowledge a kill-switch halt")
     st = sub.add_parser("selftest", help="1-cent order round-trip plumbing test (gated like run)")
     st.add_argument("--live", action="store_true")
@@ -393,6 +422,8 @@ def cli() -> None:
         asyncio.run(cmd_pm_find(args.query))
     elif args.command == "cancel-all":
         asyncio.run(cmd_cancel_all(cfg))
+    elif args.command == "equity":
+        asyncio.run(cmd_equity(cfg))
     elif args.command == "halt-clear":
         cmd_halt_clear(cfg)
     elif args.command == "selftest":
