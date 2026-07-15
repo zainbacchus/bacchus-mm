@@ -103,9 +103,9 @@ async def run_recorder(
                             pair.kalshi_ticker, k_mid, pm_mid, divergence,
                         )
                 except Exception as e:  # noqa: BLE001 — one bad pair must not stop the rest
-                    log.warning("crossvenue poll failed for %s: %s", pair.kalshi_ticker, e)
+                    log.warning("crossvenue poll failed for %s: %r", pair.kalshi_ticker, e)
                     events.emit(
-                        "error", ticker=pair.kalshi_ticker, where="crossvenue", error=str(e)
+                        "error", ticker=pair.kalshi_ticker, where="crossvenue", error=repr(e)
                     )
             await asyncio.sleep(poll_seconds)
     finally:
