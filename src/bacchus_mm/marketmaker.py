@@ -34,6 +34,10 @@ class WorkerConfig:
     fast_move_threshold: Decimal = Decimal("0.03")
     fast_move_window: float = 30.0
     fast_move_cooloff: float = 180.0
+    # A market that keeps tripping the guard is too fast for us, full stop:
+    # evict it for the rest of the session instead of cycling pull/resume.
+    # (2026-07-15: gas-CPI tripped 51x in 2.9h — 2.5h of cool-off churn.)
+    guard_evict_trips: int = 8
 
 
 class FastMoveGuard:
@@ -89,6 +93,8 @@ class MarketWorker:
         self.vol = VolEstimator(strategy.sigma_halflife_seconds, strategy.sigma_floor)
         self.guard = FastMoveGuard(cfg.fast_move_threshold, cfg.fast_move_window, cfg.fast_move_cooloff)
         self._guard_announced = False
+        self._guard_trips = 0
+        self.evicted = False
         self.top: Optional[BookTop] = None
         self.bid_order: Optional[Order] = None
         self.ask_order: Optional[Order] = None
@@ -140,15 +146,29 @@ class MarketWorker:
         top = self.top
         if top is None or top.mid is None:
             return
+        if self.evicted:
+            return
         if self.guard.blocked():
             if not self._guard_announced:
+                self._guard_trips += 1
                 self.events.emit(
                     "quotes_pulled", ticker=self.ticker, reason="fast_move",
-                    mid=top.mid, cooloff=self.cfg.fast_move_cooloff,
+                    mid=top.mid, cooloff=self.cfg.fast_move_cooloff, trip=self._guard_trips,
                 )
                 self._guard_announced = True
             self.bid_order = await self._reconcile(Side.BID, self.bid_order, None, 0)
             self.ask_order = await self._reconcile(Side.ASK, self.ask_order, None, 0)
+            if self._guard_trips >= self.cfg.guard_evict_trips:
+                self.evicted = True
+                self.events.emit(
+                    "market_evicted", ticker=self.ticker,
+                    reason=f"{self._guard_trips} guard trips", trips=self._guard_trips,
+                )
+                log.warning(
+                    "EVICTED %s for this session: %d fast-move guard trips",
+                    self.ticker, self._guard_trips,
+                )
+                return
             self._dirty.set()  # keep ticking so we resume when the cool-off ends
             return
         self._guard_announced = False

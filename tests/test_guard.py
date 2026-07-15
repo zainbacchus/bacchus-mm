@@ -1,6 +1,13 @@
+import time as _t
 from decimal import Decimal
 
-from bacchus_mm.marketmaker import FastMoveGuard
+import pytest
+
+from bacchus_mm.eventlog import EventLog
+from bacchus_mm.exchange.base import BookTop
+from bacchus_mm.marketmaker import FastMoveGuard, MarketWorker, WorkerConfig
+from bacchus_mm.risk import RiskManager, RiskParams
+from bacchus_mm.strategy.avellaneda_stoikov import StrategyParams
 
 
 def g():
@@ -40,3 +47,23 @@ def test_old_history_expires():
     guard.update(Decimal("0.40"), ts=1040.0)  # first point aged out of window
     guard.update(Decimal("0.37"), ts=1041.0)  # 3c vs 0.40@1040 -> trip
     assert guard.blocked(ts=1042.0)
+
+
+@pytest.mark.asyncio
+async def test_worker_evicts_after_repeated_trips(tmp_path):
+    events = EventLog(tmp_path, "t")
+    risk = RiskManager(params=RiskParams(), state_dir=tmp_path)
+    cfg = WorkerConfig(guard_evict_trips=3)
+    w = MarketWorker("MKT", exchange=None, strategy=StrategyParams(), risk=risk,
+                     events=events, cfg=cfg, dry_run=True)
+    w.top = BookTop("MKT", Decimal("0.40"), 10, Decimal("0.44"), 10, 0)
+    for _ in range(3):
+        w.guard._blocked_until = _t.monotonic() + 60
+        w._guard_announced = False
+        await w._requote()
+    assert w.evicted
+    rows = events.db.execute("SELECT COUNT(*) FROM events WHERE type='market_evicted'").fetchone()
+    assert rows[0] == 1
+    # further requotes are inert once evicted
+    await w._requote()
+    events.close()

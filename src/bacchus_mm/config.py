@@ -70,6 +70,7 @@ class Config:
     fast_move_threshold: Decimal
     fast_move_window: float
     fast_move_cooloff: float
+    guard_evict_trips: int
     selector_refresh_minutes: int
     raw: dict = field(repr=False, default_factory=dict)
 
@@ -135,6 +136,7 @@ class Config:
             fast_move_threshold=_dec(stra, "fast_move_threshold", Decimal("0.03")),
             fast_move_window=float(stra.get("fast_move_window", 30)),
             fast_move_cooloff=float(stra.get("fast_move_cooloff", 180)),
+            guard_evict_trips=int(stra.get("guard_evict_trips", 8)),
             selector_refresh_minutes=int(sel.get("refresh_minutes", 30)),
             raw=data,
         )

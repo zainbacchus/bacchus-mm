@@ -147,6 +147,7 @@ async def cmd_trade(cfg: Config, live: bool, dry_run: bool) -> None:
             fast_move_threshold=cfg.fast_move_threshold,
             fast_move_window=cfg.fast_move_window,
             fast_move_cooloff=cfg.fast_move_cooloff,
+            guard_evict_trips=cfg.guard_evict_trips,
         )
         for t in tickers:
             workers[t] = MarketWorker(t, ex, cfg.strategy, risk, events, wcfg, dry_run=dry_run)

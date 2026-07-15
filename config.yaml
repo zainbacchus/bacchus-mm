@@ -51,6 +51,9 @@ strategy:
   fast_move_threshold: 0.03
   fast_move_window: 30 # seconds
   fast_move_cooloff: 180 # seconds
+  # A market tripping the guard this many times in one session is evicted for
+  # the session (2026-07-15: gas-CPI tripped 51x in 2.9h = pure cool-off churn).
+  guard_evict_trips: 8
 
 risk:
   max_contracts_per_market: 20
