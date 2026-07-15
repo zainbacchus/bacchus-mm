@@ -20,6 +20,14 @@ matter and Kalshi is the laggard often enough to exploit defensively.
 
 ## Phase C — Polymarket execution (future, needs its own risk review)
 
+Spread survey 2026-07-15: PM's econ-adjacent books are TIGHTER than ours
+(0.1-1c spreads, 0.1-0.25c ticks, mature MM ecosystem + liquidity rewards,
+nonzero maker/taker base-fee fields), and only ~8 econ markets clear 1k/24h
+volume in the top 400. MM there is unattractive for our categories; Kalshi's
+coarse-tick niche books are the less-competed venue. Re-survey before
+building this phase. (Also: PM's 0.1c ticks make small cross-venue
+"divergence" partly tick-granularity artifact.)
+
 Trade on Polymarket US (credentials via `scripts/add-polymarket-key.sh`):
 - either market making on the PM side of mapped markets, or
 - cross-venue basis trades when |divergence| exceeds round-trip costs.
