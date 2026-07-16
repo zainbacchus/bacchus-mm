@@ -128,11 +128,13 @@ class ExchangeAdapter(abc.ABC):
     @abc.abstractmethod
     async def stream(
         self,
-        tickers: list[str],
+        get_tickers: Callable[[], list[str]],
         on_book_top: Callable[[BookTop], None],
         on_fill: Callable[[Fill], None],
     ) -> AsyncIterator[None]:
-        """Run the market-data + fills stream until cancelled."""
+        """Run the market-data + fills stream until cancelled. get_tickers is
+        re-evaluated on every (re)connect so the subscription can change
+        mid-session (see request_resubscribe on implementations)."""
 
     @abc.abstractmethod
     async def close(self) -> None: ...

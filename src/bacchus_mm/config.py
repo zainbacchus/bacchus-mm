@@ -101,6 +101,7 @@ class Config:
             max_markets=int(sel.get("max_markets", 6)),
             volume_weight=float(sel.get("volume_weight", 0.35)),
             spread_weight=float(sel.get("spread_weight", 0.65)),
+            max_move_24h=_dec(sel, "max_move_24h", Decimal("0.10")),
         )
         strategy = StrategyParams(
             gamma=float(stra.get("gamma", 0.3)),

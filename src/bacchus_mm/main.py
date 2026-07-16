@@ -110,7 +110,15 @@ async def cmd_trade(cfg: Config, live: bool, dry_run: bool) -> None:
 
     try:
         markets = await ex.list_markets()
-        picks = select_markets(markets, cfg.selector)
+        # Select extra markets as a standby bench: evicted workers get replaced
+        # from it mid-session instead of the book shrinking all night.
+        from dataclasses import replace as dc_replace
+
+        all_picks = select_markets(
+            markets, dc_replace(cfg.selector, max_markets=cfg.selector.max_markets + 8)
+        )
+        picks = all_picks[: cfg.selector.max_markets]
+        standby = [s.market for s in all_picks[cfg.selector.max_markets :]]
         if not picks:
             sys.exit("Selector found no eligible markets; try `bacchus-mm markets` and loosen filters.")
         tickers = [s.market.ticker for s in picks]
@@ -173,9 +181,46 @@ async def cmd_trade(cfg: Config, live: bool, dry_run: bool) -> None:
                 risk.markets[f.ticker].position, risk.pnl(),
             )
 
+        def active_tickers() -> list[str]:
+            # Stream everything we quote, plus anything we still hold (evicted
+            # markets with open positions need mid marks for PnL/kill switch).
+            out = set()
+            for t, w in workers.items():
+                if not w.evicted or (risk.markets.get(t) and risk.markets[t].position):
+                    out.add(t)
+            return sorted(out)
+
         async def consume_stream():
-            async for _ in ex.stream(tickers, on_book_top, on_fill):
+            async for _ in ex.stream(active_tickers, on_book_top, on_fill):
                 pass
+
+        async def bench_loop():
+            """Replace evicted workers from the standby bench."""
+            replaced: set[str] = set()
+            while not stop_event.is_set():
+                await asyncio.sleep(30)
+                for t, w in list(workers.items()):
+                    if not w.evicted or t in replaced:
+                        continue
+                    replaced.add(t)
+                    while standby:
+                        sub = standby.pop(0)
+                        if sub.ticker in workers:
+                            continue
+                        workers[sub.ticker] = MarketWorker(
+                            sub.ticker, ex, cfg.strategy, risk, events, wcfg, dry_run=dry_run
+                        )
+                        risk.seed_position(sub.ticker, positions.get(sub.ticker, 0), sub.mid)
+                        tasks.append(asyncio.create_task(workers[sub.ticker].run()))
+                        events.emit(
+                            "market_promoted", ticker=sub.ticker, replaces=t,
+                            standby_remaining=len(standby),
+                        )
+                        log.info("promoted %s from standby (replacing evicted %s)", sub.ticker, t)
+                        ex.request_resubscribe()
+                        break
+                    else:
+                        log.warning("standby bench empty; %s not replaced", t)
 
         async def risk_loop():
             while not stop_event.is_set():
@@ -197,6 +242,7 @@ async def cmd_trade(cfg: Config, live: bool, dry_run: bool) -> None:
 
         tasks.append(asyncio.create_task(consume_stream()))
         tasks.append(asyncio.create_task(risk_loop()))
+        tasks.append(asyncio.create_task(bench_loop()))
         tasks += [asyncio.create_task(w.run()) for w in workers.values()]
 
         # Cross-venue recorder rides along whenever pairs are configured — one

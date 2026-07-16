@@ -26,6 +26,7 @@ selector:
   min_price: 0.10 # stay out of the tails: asymmetric payoff risk
   max_price: 0.90
   min_hours_to_close: 12
+  max_move_24h: 0.10 # falling-knife filter: skip markets that moved this much in 24h
   max_markets: 6
   volume_weight: 0.35
   spread_weight: 0.65

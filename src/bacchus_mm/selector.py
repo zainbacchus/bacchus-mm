@@ -27,6 +27,10 @@ class SelectorParams:
     max_markets: int = 6
     volume_weight: float = 0.35
     spread_weight: float = 0.65
+    # Falling-knife filter: a market that moved this much in 24h is trending,
+    # and a symmetric quoter in a trending market buys from people who are
+    # right (2026-07-16: three bad fills on one market sliding 0.40 -> 0.10).
+    max_move_24h: Decimal = Decimal("0.10")
 
 
 @dataclass
@@ -61,6 +65,9 @@ def select_markets(markets: list[MarketInfo], p: SelectorParams) -> list[ScoredM
         if m.volume_24h < p.min_volume_24h:
             continue
         if _hours_to_close(m.close_time) < p.min_hours_to_close:
+            continue
+        prev = m.raw.get("previous_price_dollars")
+        if prev not in (None, "") and abs(m.mid - Decimal(str(prev))) > p.max_move_24h:
             continue
         eligible.append(m)
 

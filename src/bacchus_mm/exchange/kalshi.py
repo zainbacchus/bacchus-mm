@@ -166,6 +166,7 @@ class KalshiExchange(ExchangeAdapter):
         self._session: Optional[aiohttp.ClientSession] = None
         self._write_bucket = TokenBucket(write_tokens_per_second)
         self.order_group_id: Optional[str] = None
+        self._resubscribe = False
 
     # ---------------------------------------------------------------- REST
 
@@ -391,9 +392,14 @@ class KalshiExchange(ExchangeAdapter):
 
     # ------------------------------------------------------------ WEBSOCKET
 
+    def request_resubscribe(self) -> None:
+        """Ask the running stream to reconnect with a fresh get_tickers() —
+        used when the active market set changes mid-session."""
+        self._resubscribe = True
+
     async def stream(
         self,
-        tickers: list[str],
+        get_tickers: Callable[[], list[str]],
         on_book_top: Callable[[BookTop], None],
         on_fill: Callable[[Fill], None],
     ) -> AsyncIterator[None]:
@@ -401,9 +407,11 @@ class KalshiExchange(ExchangeAdapter):
         Reconnects forever; caller cancels the task to stop."""
         if self.auth is None:
             raise RuntimeError("websocket requires API credentials")
-        books: dict[str, OrderBook] = {t: OrderBook(t) for t in tickers}
+        self._resubscribe = False
         backoff = 1.0
         while True:
+            tickers = get_tickers()
+            books: dict[str, OrderBook] = {t: OrderBook(t) for t in tickers}
             try:
                 session = await self._http()
                 headers = self.auth.headers("GET", "/trade-api/ws/v2")
@@ -424,6 +432,10 @@ class KalshiExchange(ExchangeAdapter):
                     backoff = 1.0
                     seqs: dict[int, int] = {}
                     async for raw in ws:
+                        if self._resubscribe:
+                            self._resubscribe = False
+                            log.info("resubscribing websocket with updated market set")
+                            raise _ResubscribeRequested()
                         if raw.type != aiohttp.WSMsgType.TEXT:
                             continue
                         msg = json.loads(raw.data)
@@ -472,6 +484,8 @@ class KalshiExchange(ExchangeAdapter):
                         yield
             except asyncio.CancelledError:
                 raise
+            except _ResubscribeRequested:
+                continue  # immediate reconnect with fresh tickers, no backoff
             except Exception as e:  # noqa: BLE001 — reconnect on any transport error
                 log.warning("ws disconnected (%s); reconnecting in %.1fs", e, backoff)
                 await asyncio.sleep(backoff)
@@ -480,6 +494,10 @@ class KalshiExchange(ExchangeAdapter):
     async def close(self) -> None:
         if self._session and not self._session.closed:
             await self._session.close()
+
+
+class _ResubscribeRequested(Exception):
+    """Internal signal: reconnect the websocket with an updated ticker set."""
 
 
 class KalshiApiError(RuntimeError):
