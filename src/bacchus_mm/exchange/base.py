@@ -30,6 +30,7 @@ class MarketInfo:
     yes_ask: Optional[Decimal]
     volume_24h: Decimal
     open_interest: Decimal
+    series_ticker: str = ""
     raw: dict = field(repr=False, default_factory=dict)
 
     @property

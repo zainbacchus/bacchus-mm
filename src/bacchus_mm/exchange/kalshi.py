@@ -167,6 +167,7 @@ class KalshiExchange(ExchangeAdapter):
         self._write_bucket = TokenBucket(write_tokens_per_second)
         self.order_group_id: Optional[str] = None
         self._resubscribe = False
+        self.trading_paused_until = 0.0
 
     # ---------------------------------------------------------------- REST
 
@@ -240,6 +241,8 @@ class KalshiExchange(ExchangeAdapter):
                         MarketInfo(
                             ticker=m["ticker"],
                             event_ticker=ev.get("event_ticker", ""),
+                            series_ticker=ev.get("series_ticker")
+                            or ev.get("event_ticker", "").split("-")[0],
                             title=m.get("title") or ev.get("title") or "",
                             category=category,
                             close_time=m.get("close_time", ""),
@@ -254,6 +257,34 @@ class KalshiExchange(ExchangeAdapter):
             if not cursor:
                 break
         return out
+
+    async def get_24h_mid_range(self, series_ticker: str, ticker: str) -> Optional[Decimal]:
+        """Realized 24h swing of the bid/ask midpoint from hourly candles — the
+        falling-knife signal (a net-move check misses round trips: one market
+        swung 66c in a day and netted -10c). None when history is unavailable."""
+        now = int(time.time())
+        try:
+            data = await self._request(
+                "GET",
+                f"/series/{series_ticker}/markets/{ticker}/candlesticks",
+                params={"period_interval": 60, "start_ts": now - 86400, "end_ts": now},
+                authed=False,
+            )
+        except Exception:  # noqa: BLE001 — screening signal, never fatal
+            return None
+        mids_hi, mids_lo = [], []
+        for c in data.get("candlesticks", []):
+            bid, ask = c.get("yes_bid") or {}, c.get("yes_ask") or {}
+            try:
+                hi = (Decimal(bid["high_dollars"]) + Decimal(ask["high_dollars"])) / 2
+                lo = (Decimal(bid["low_dollars"]) + Decimal(ask["low_dollars"])) / 2
+            except (KeyError, TypeError):
+                continue
+            mids_hi.append(hi)
+            mids_lo.append(lo)
+        if not mids_hi:
+            return None
+        return max(mids_hi) - min(mids_lo)
 
     async def create_order(
         self,

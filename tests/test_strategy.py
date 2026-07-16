@@ -80,3 +80,23 @@ def test_vol_estimator_floors_and_updates():
     for i in range(1, 50):
         v.update(Decimal("0.50") + Decimal("0.02") * (1 if i % 2 else -1), t + i)
     assert v.sigma > 0.004
+
+
+def test_join_best_joins_when_edge_remains():
+    from bacchus_mm.strategy.avellaneda_stoikov import apply_join_best
+    q = quotes(mid="0.50")  # bid ~0.47, ask ~0.53, reservation 0.50
+    out = apply_join_best(q, Decimal("0.48"), Decimal("0.52"))
+    assert out.bid == Decimal("0.48") and out.joined_bid  # joined best bid, 2c edge kept
+    assert out.ask == Decimal("0.52") and out.joined_ask
+
+
+def test_join_best_refuses_without_edge_or_tight_book():
+    from bacchus_mm.strategy.avellaneda_stoikov import apply_join_best
+    q = quotes(mid="0.50")
+    # book best bid at 0.49: joining leaves only 1c edge vs reservation -> refuse
+    out = apply_join_best(q, Decimal("0.49"), Decimal("0.53"))
+    assert not out.joined_bid and out.bid < Decimal("0.49")
+    # tight book (2c spread) -> never join
+    q2 = quotes(mid="0.50")
+    out2 = apply_join_best(q2, Decimal("0.49"), Decimal("0.51"))
+    assert not out2.joined_bid and not out2.joined_ask

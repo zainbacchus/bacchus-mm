@@ -20,7 +20,12 @@ from .eventlog import EventLog
 from .exchange.base import BookTop, ExchangeAdapter, Order, Side
 from .exchange.kalshi import new_client_order_id
 from .risk import RiskManager
-from .strategy.avellaneda_stoikov import StrategyParams, VolEstimator, compute_quotes
+from .strategy.avellaneda_stoikov import (
+    StrategyParams,
+    VolEstimator,
+    apply_join_best,
+    compute_quotes,
+)
 
 log = logging.getLogger(__name__)
 
@@ -183,6 +188,7 @@ class MarketWorker:
             sigma=self.vol.sigma,
             p=self.strategy,
         )
+        quotes = apply_join_best(quotes, top.bid, top.ask)
         self.events.emit(
             "quote_decision",
             ticker=self.ticker,
@@ -199,6 +205,8 @@ class MarketWorker:
             bid_size=quotes.bid_size,
             ask=quotes.ask,
             ask_size=quotes.ask_size,
+            joined_bid=quotes.joined_bid,
+            joined_ask=quotes.joined_ask,
             dry_run=self.dry_run,
         )
         self.bid_order = await self._reconcile(Side.BID, self.bid_order, quotes.bid, quotes.bid_size)
@@ -230,6 +238,7 @@ class MarketWorker:
                 self.events.emit(
                     "order_canceled", ticker=self.ticker, side=side.value,
                     order_id=existing.order_id, price=existing.price,
+                    reason="guard_pull" if price is None else "requote",
                 )
             except Exception as e:  # noqa: BLE001
                 self.events.emit(
@@ -237,6 +246,8 @@ class MarketWorker:
                 )
         if price is None or size <= 0:
             return None
+        if getattr(self.exchange, "trading_paused_until", 0.0) > time.monotonic():
+            return None  # exchange paused: place nothing, re-check next cycle
         signed = size if side is Side.BID else -size
         ok, reason = self.risk.approve_order(self.ticker, signed, price)
         if not ok:
@@ -261,6 +272,15 @@ class MarketWorker:
             )
             return order
         except Exception as e:  # noqa: BLE001
+            if "paused" in str(e).lower():
+                # Exchange-wide pause (e.g. nightly maintenance): back off creates
+                # globally for 5 min instead of hammering rejects (687 in one night).
+                already = getattr(self.exchange, "trading_paused_until", 0.0) > time.monotonic()
+                self.exchange.trading_paused_until = time.monotonic() + 300
+                if not already:
+                    self.events.emit("exchange_paused", ticker=self.ticker, backoff_s=300)
+                    log.warning("exchange reports trading paused; backing off creates 300s")
+                return None
             self.events.emit(
                 "order_rejected", ticker=self.ticker, side=side.value,
                 price=price, size=size, error=str(e),
@@ -285,6 +305,10 @@ class MarketWorker:
             if order is not None and not self.dry_run:
                 try:
                     await self.exchange.cancel_order(order.order_id)
+                    self.events.emit(
+                        "order_canceled", ticker=self.ticker, side=order.side.value,
+                        order_id=order.order_id, price=order.price, reason="shutdown",
+                    )
                 except Exception as e:  # noqa: BLE001
                     log.warning("stop-cancel %s failed: %s", order.order_id, e)
         self.bid_order = self.ask_order = None

@@ -51,6 +51,8 @@ class QuotePair:
     reservation: Decimal
     half_spread: Decimal
     sigma: float
+    joined_bid: bool = False
+    joined_ask: bool = False
 
 
 class VolEstimator:
@@ -83,6 +85,36 @@ class VolEstimator:
 
 def _round_to_tick(p: Decimal, tick: Decimal, mode) -> Decimal:
     return (p / tick).quantize(Decimal(1), rounding=mode) * tick
+
+
+def apply_join_best(
+    quotes: "QuotePair",
+    book_bid: Optional[Decimal],
+    book_ask: Optional[Decimal],
+    min_book_spread: Decimal = Decimal("0.03"),
+    join_margin: Decimal = Decimal("0.02"),
+) -> "QuotePair":
+    """Queue competitiveness (day-2 audit: ~75% of quotes rested BEHIND the best
+    level and near-never filled). When the model price is behind best and the
+    book spread still pays, join the best level — never improve past it, and
+    only when joining keeps >= join_margin of edge vs the reservation price."""
+    if book_bid is None or book_ask is None or book_ask - book_bid < min_book_spread:
+        return quotes
+    if (
+        quotes.bid is not None
+        and quotes.bid < book_bid
+        and quotes.reservation - book_bid >= join_margin
+    ):
+        quotes.bid = book_bid
+        quotes.joined_bid = True
+    if (
+        quotes.ask is not None
+        and quotes.ask > book_ask
+        and book_ask - quotes.reservation >= join_margin
+    ):
+        quotes.ask = book_ask
+        quotes.joined_ask = True
+    return quotes
 
 
 def compute_quotes(

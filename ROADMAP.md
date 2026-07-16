@@ -64,6 +64,23 @@ Hard prerequisites before any of this:
 - **Multi-level laddering** — 2-3 levels per side once single-level earns.
 - Settlement scalping (97-99c near-certainties): rejected — tail risk.
 
+## Deep-review queue (2026-07-16 workflow findings, deferred deliberately)
+
+- Sigma warmup seeding + realized-vol floor from own mids (A-S is effectively a
+  constant 2.86c quoter today — 85.6% of decisions at the sigma floor); wait
+  for post-join-best fill data before touching spread math.
+- Flow-ranked selection: rank candidates by realized taker flow, not spread
+  (economics dim: order flow, not spread width, is the binding constraint on
+  income; current picks trade a handful of times/day). Overnight dead zone:
+  all 10 first-day fills landed 07:31-18:22.
+- Account-equity kill switch (replace per-session rebase) + reduce-only exit
+  quotes for orphan positions; startup worker jitter before scaling past ~10
+  markets (startup burst is 80% of the write budget).
+- Stability-gated guard re-entry (mid-range must settle before re-quoting);
+  count trips only when the move persists past cooloff.
+- Phase B lead/lag: remeasure on near-50c contracts around FOMC/CPI catalysts
+  (current Fed pairs at 0.95/0.05 cannot reprice — data uninformative).
+
 ## Also queued
 
 - Raise `selector.min_hours_to_close` if same-day settlement markets (daily

@@ -88,6 +88,18 @@ async def cmd_trade(cfg: Config, live: bool, dry_run: bool) -> None:
                 "AND pass --live. (KALSHI_ENV=demo for the demo environment.)"
             )
 
+    # Single-instance lock: two concurrent bots double exposure and fight over
+    # each other's orders (observed: 44s dual-process overlap on 07-15). flock
+    # releases automatically on any process death — no stale-lock handling needed.
+    import fcntl
+
+    cfg.data_dir.mkdir(parents=True, exist_ok=True)
+    lock_handle = open(cfg.data_dir / "bot.lock", "w")
+    try:
+        fcntl.flock(lock_handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        sys.exit("Another bacchus-mm instance is already running (data/bot.lock is held).")
+
     ex = _build_exchange(cfg, need_auth=True)
     session_id = f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
     events = EventLog(cfg.data_dir, session_id)
@@ -117,6 +129,43 @@ async def cmd_trade(cfg: Config, live: bool, dry_run: bool) -> None:
         all_picks = select_markets(
             markets, dc_replace(cfg.selector, max_markets=cfg.selector.max_markets + 8)
         )
+
+        # Penalty box: tickers evicted in the last 48h are excluded — the same
+        # flickery markets kept getting re-selected every restart (71% of all
+        # guard trips came from two repeat offenders).
+        import sqlite3 as _sq
+
+        cutoff = int((time.time() - 48 * 3600) * 1000)
+        _db = _sq.connect(f"file:{cfg.data_dir / 'bacchus.db'}?mode=ro", uri=True)
+        boxed = {
+            r[0]
+            for r in _db.execute(
+                "SELECT DISTINCT ticker FROM events WHERE type='market_evicted' AND ts_ms > ?",
+                (cutoff,),
+            )
+        }
+        _db.close()
+        if boxed:
+            log.info("penalty box (evicted <48h ago, excluded): %s", ", ".join(sorted(boxed)))
+            all_picks = [s for s in all_picks if s.market.ticker not in boxed]
+
+        # Falling-knife RANGE screen: the net-move filter misses round trips
+        # (one market swung 66c in 24h and netted -10c). Check realized 24h
+        # mid range from hourly candles for every candidate.
+        screened = []
+        for s_pick in all_picks:
+            rng = await ex.get_24h_mid_range(s_pick.market.series_ticker, s_pick.market.ticker)
+            if rng is not None and rng > cfg.selector.max_move_24h:
+                events.emit(
+                    "selection_rejected", ticker=s_pick.market.ticker,
+                    reason="24h_range", range_24h=rng,
+                )
+                log.info("range screen: %s 24h swing %.2f > %.2f, skipped",
+                         s_pick.market.ticker, rng, cfg.selector.max_move_24h)
+                continue
+            screened.append(s_pick)
+        all_picks = screened
+
         picks = all_picks[: cfg.selector.max_markets]
         standby = [s.market for s in all_picks[cfg.selector.max_markets :]]
         if not picks:
@@ -127,6 +176,11 @@ async def cmd_trade(cfg: Config, live: bool, dry_run: bool) -> None:
         positions = await ex.get_positions()
         for s in picks:
             risk.seed_position(s.market.ticker, positions.get(s.market.ticker, 0), s.market.mid)
+        # Orphan positions (held in markets we no longer quote) stay marked so
+        # PnL and the kill switch always see the whole book.
+        for t, pos in positions.items():
+            if t not in tickers:
+                risk.seed_position(t, pos, None)
 
         if not dry_run:
             await ex.ensure_order_group(cfg.order_group_contracts_per_15s)
@@ -160,10 +214,17 @@ async def cmd_trade(cfg: Config, live: bool, dry_run: bool) -> None:
         for t in tickers:
             workers[t] = MarketWorker(t, ex, cfg.strategy, risk, events, wcfg, dry_run=dry_run)
 
+        _orphan_mark: dict[str, float] = {}
+
         def on_book_top(top):
             w = workers.get(top.ticker)
             if w:
                 w.on_book_top(top)
+            elif top.mid is not None:
+                risk.on_mid(top.ticker, top.mid)
+                if time.monotonic() - _orphan_mark.get(top.ticker, 0) >= 60:
+                    events.record_mid(top.ticker, top.mid, top.bid, top.ask)
+                    _orphan_mark[top.ticker] = time.monotonic()
 
         def on_fill(f: Fill):
             w = workers.get(f.ticker)
@@ -182,11 +243,14 @@ async def cmd_trade(cfg: Config, live: bool, dry_run: bool) -> None:
             )
 
         def active_tickers() -> list[str]:
-            # Stream everything we quote, plus anything we still hold (evicted
-            # markets with open positions need mid marks for PnL/kill switch).
+            # Stream everything we quote, plus anything we still hold — evicted
+            # or orphaned markets with open positions need mids for PnL marking.
             out = set()
             for t, w in workers.items():
-                if not w.evicted or (risk.markets.get(t) and risk.markets[t].position):
+                if not w.evicted:
+                    out.add(t)
+            for t, st in risk.markets.items():
+                if st.position:
                     out.add(t)
             return sorted(out)
 
