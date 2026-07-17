@@ -73,9 +73,9 @@ Hard prerequisites before any of this:
   (economics dim: order flow, not spread width, is the binding constraint on
   income; current picks trade a handful of times/day). Overnight dead zone:
   all 10 first-day fills landed 07:31-18:22.
-- Account-equity kill switch (replace per-session rebase) + reduce-only exit
-  quotes for orphan positions; startup worker jitter before scaling past ~10
-  markets (startup burst is 80% of the write budget).
+- Account-equity kill switch (replace per-session rebase); startup worker
+  jitter before scaling past ~10 markets (startup burst is 80% of the write
+  budget). (Reduce-only orphan exits: DONE 2026-07-16, wind-down workers.)
 - Stability-gated guard re-entry (mid-range must settle before re-quoting);
   count trips only when the move persists past cooloff.
 - Phase B lead/lag: remeasure on near-50c contracts around FOMC/CPI catalysts
@@ -85,13 +85,13 @@ Hard prerequisites before any of this:
 
 - Raise `selector.min_hours_to_close` if same-day settlement markets (daily
   temperature) prove toxic in observe logs.
-- Fly.io deployment (Dockerfile + volume for data/) once local operation is boring.
+- Fly.io deployment (Dockerfile + volume for data/) — priority raised
+  2026-07-16: lid-close sleep blacked out ~7h of quoting across two episodes
+  in one day; laptop hosting is now the biggest single uptime cost.
+- Reconcile fills via REST on websocket reconnect (fills during the <=15min
+  pre-TTL sleep window are invisible until restart).
 - Order amend instead of cancel/replace where it saves rate-limit tokens.
 - Settlement handling mid-session (positions in settled markets currently
   just stop marking).
-- Orphan-position management: when the selector drops a market we still hold
-  (first case 2026-07-15: +1 KXPCECORE after fills), no worker quotes the exit
-  — position rides to settlement unless manually closed. Consider a wind-down
-  worker that keeps a reduce-only ask on dropped positions.
 - In-session selector refresh (config has refresh_minutes but markets are
   currently fixed at session start; miscategorized picks persist until restart).
