@@ -95,6 +95,23 @@ Hard prerequisites before any of this:
 - Phase B lead/lag: remeasure on near-50c contracts around FOMC/CPI catalysts
   (current Fed pairs at 0.95/0.05 cannot reprice — data uninformative).
 
+## Watch items for the weekly review (2026-07-17 pre-wait check)
+
+- **Wind-down exits on flickery books pay the flicker**: the 12 legacy
+  orphans all exited within 20h (system works), but the 3 exits in flicker
+  markets (gas-CPI, Austin/NYC rain) filled at spike extremes 18-25c through
+  the mid (~-$2 of the flattening cost was exit slippage). Candidate fix if
+  the pattern repeats on NEW wind-downs: reduce-only quotes should JOIN the
+  book, never lead it (cap exit price at best +/- 1 tick). One-time legacy
+  cost for now — selection fixes largely prevent entering such books.
+- **Join policy A has zero baseline**: every fill under the conservative
+  policy (2c/3c, 07-16 12:27 -> 07-17 15:30) was joined=False — the old
+  band literally never produced a joined fill. Policy A's revert gate must
+  be judged purely on this week's data.
+- **kv equity chain anchored at upgrade time (2026-07-17 ~15:30)**: the $10
+  cumulative kill switch measures from there, NOT from the $500 start
+  (pre-upgrade -$3.23 is water under the bridge by design).
+
 ## Also queued
 
 - Raise `selector.min_hours_to_close` if same-day settlement markets (daily
