@@ -47,6 +47,28 @@ from .risk import RiskManager
 log = logging.getLogger(__name__)
 
 
+def managed_tickers(
+    workers: dict[str, MarketWorker] | None = None,
+    risk: RiskManager | None = None,
+    selected: list[str] | tuple[str, ...] = (),
+) -> list[str]:
+    """Every ticker WE manage (2026-07-17, H2): all worker tickers (including
+    evicted ones — their orders may still rest until TTL) plus anything we
+    hold a position in, plus an optional explicit selection. Account-wide
+    cancels (startup sweep, kill switch, shutdown, sweep safety net) scope to
+    this set so a second strategy on the same account is left alone. The
+    single-writer flock assumption still stands for UNKNOWN orders: an order
+    we don't track on one of our tickers is still orphan-canceled by the
+    reconcile pass. Empty set cancels NOTHING (fail-safe direction)."""
+    out = set(selected)
+    for t in (workers or {}):
+        out.add(t)
+    for t, st in (risk.markets if risk else {}).items():
+        if st.position:
+            out.add(t)
+    return sorted(out)
+
+
 @dataclass
 class ReconcileReport:
     vanished: list[tuple[str, str, str]] = field(default_factory=list)  # (ticker, side, order_id)
@@ -205,7 +227,10 @@ async def reconcile_pass(
             )
             gate.engage_cooloff(sweep_cooloff_seconds)
             try:
-                await exchange.cancel_all_orders()  # cheap no-op safety net
+                # 2026-07-17 (H2): scope the safety net to tickers we manage —
+                # account-wide cancels block sharing the account with a second
+                # strategy. Everything the sweep just vanished is in this set.
+                await exchange.cancel_all_orders(tickers=managed_tickers(workers, risk))
             except Exception:  # noqa: BLE001
                 log.exception("cancel-all after sweep failed — CHECK THE EXCHANGE UI")
             report.sweep = True

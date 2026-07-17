@@ -7,6 +7,7 @@ import pytest
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
+from bacchus_mm.exchange.base import Side
 from bacchus_mm.exchange.kalshi import (
     KalshiAuth,
     KalshiExchange,
@@ -138,23 +139,31 @@ class _FakeWsMessage:
 
 
 class _FakeWs:
-    """Scripted websocket: yields messages, then raises `after` (ends the feed)."""
+    """Scripted websocket: hands out messages via receive(), then raises
+    `after` (ends the feed). 2026-07-17 (M2): the stream loop now calls
+    ws.receive() under a timeout instead of `async for`."""
 
     def __init__(self, messages, after=None):
-        self._messages = messages
+        self._messages = list(messages)
         self._after = after if after is not None else asyncio.CancelledError()
         self.sent: list[dict] = []
 
     async def send_json(self, obj):
         self.sent.append(obj)
 
-    def __aiter__(self):
-        return self._gen()
-
-    async def _gen(self):
-        for m in self._messages:
-            yield _FakeWsMessage(m)
+    async def receive(self):
+        if self._messages:
+            return _FakeWsMessage(self._messages.pop(0))
         raise self._after
+
+
+class _SilentWs(_FakeWs):
+    """Quiet-book websocket (2026-07-17, M2): receive() never returns — the
+    only escapes are the caller's timeout or cancellation."""
+
+    async def receive(self):
+        await asyncio.sleep(3600)
+        raise AssertionError("unreachable")
 
 
 class _FakeWsConn:
@@ -245,4 +254,133 @@ async def test_stream_transport_error_reconnects():
             pass
     assert [f.trade_id for f in seen] == ["t1"]
     assert session.connects == 2  # transport failure DID reconnect
+    await ex.close()
+
+
+# ------------------------------------------- M2: resubscribe starvation fix
+
+@pytest.mark.asyncio
+async def test_resubscribe_honored_during_silence_within_timeout():
+    """2026-07-17 (M2): a bench promotion requests resubscribe while the book
+    is dead quiet. The old `async for` only checked the flag on message
+    arrival, so the new ticker could stay unsubscribed for hours; the receive
+    timeout must surface it within ws_recv_timeout_seconds."""
+    session = _FakeHttpSession(
+        ([], None),  # first connect: silent forever
+        ([], None),  # second connect (post-resubscribe): ends the feed
+    )
+    ex = KalshiExchange(env="demo", auth=_stub_auth(), ws_recv_timeout_seconds=0.05)
+
+    async def fake_http():
+        return session
+
+    ex._http = fake_http
+    # Patch the session to hand out silent sockets (counting connects).
+    def silent_connect(url, headers=None, heartbeat=None):
+        session.connects += 1
+        return _FakeWsConn(_SilentWs([]))
+
+    session.ws_connect = silent_connect
+
+    tickers = [["MKT-A"]]
+
+    async def consume():
+        async for _ in ex.stream(lambda: tickers[0], lambda top: None, lambda f: None):
+            pass
+
+    task = asyncio.create_task(consume())
+    await asyncio.sleep(0.12)  # a couple of silent receive timeouts pass
+    assert session.connects == 1  # still on the first socket: no reason to reconnect
+    tickers[0] = ["MKT-A", "MKT-B"]  # bench promotion
+    ex.request_resubscribe()
+    await asyncio.sleep(0.2)  # must reconnect within ~the 50ms timeout, not hours
+    assert session.connects == 2
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await ex.close()
+
+
+@pytest.mark.asyncio
+async def test_silence_without_resubscribe_keeps_socket():
+    """The timeout is a flag check, not a reconnect trigger: a quiet book
+    with no pending resubscribe stays on one socket."""
+    session = _FakeHttpSession(([], None), ([], None))
+    ex = KalshiExchange(env="demo", auth=_stub_auth(), ws_recv_timeout_seconds=0.05)
+
+    async def fake_http():
+        return session
+
+    ex._http = fake_http
+
+    def silent_connect(url, headers=None, heartbeat=None):
+        session.connects += 1
+        return _FakeWsConn(_SilentWs([]))
+
+    session.ws_connect = silent_connect
+
+    async def consume():
+        async for _ in ex.stream(lambda: ["MKT"], lambda top: None, lambda f: None):
+            pass
+
+    task = asyncio.create_task(consume())
+    await asyncio.sleep(0.22)  # several timeouts
+    assert session.connects == 1
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await ex.close()
+
+
+# ------------------------------------------- M6: create-order is non-retrying
+
+@pytest.mark.asyncio
+async def test_create_order_never_retries_ambiguous_failures():
+    """2026-07-17 (M6): Kalshi's OpenAPI spec documents idempotency only for
+    transfers (client_transfer_id), not orders — duplicate client_order_id
+    rejection is undocumented, so a retried POST could double-place. Exactly
+    one attempt per create_order call, whatever the failure flavor."""
+    import aiohttp as _aiohttp
+
+    for failure in (
+        _aiohttp.ClientError("conn reset"),
+        RuntimeError("POST /portfolio/events/orders -> 500: boom"),
+    ):
+        ex = KalshiExchange(env="demo", auth=_stub_auth())
+        attempts = 0
+
+        async def fake_request(method, path, *, params=None, body=None, authed=True, retries=3):
+            nonlocal attempts
+            attempts += 1
+            assert retries == 0  # the adapter asked for no retries
+            raise failure
+
+        ex._request = fake_request
+        with pytest.raises(Exception):
+            await ex.create_order(
+                ticker="MKT", side=Side.BID,
+                price=Decimal("0.40"), count=1, client_order_id="c1",
+            )
+        assert attempts == 1
+        await ex.close()
+
+
+@pytest.mark.asyncio
+async def test_create_order_post_only_default_and_override():
+    """2026-07-17 (M4): post_only stays True for every normal caller; the
+    wind-down cross_1tick escalation is the only post_only=False path."""
+    bodies = []
+    ex = KalshiExchange(env="demo", auth=_stub_auth())
+
+    async def fake_request(method, path, *, params=None, body=None, authed=True, retries=3):
+        bodies.append(body)
+        return {"order": {"order_id": "o1", "status": "resting"}}
+
+    ex._request = fake_request
+    await ex.create_order(ticker="MKT", side=Side.BID, price=Decimal("0.40"),
+                          count=1, client_order_id="c1")
+    await ex.create_order(ticker="MKT", side=Side.ASK, price=Decimal("0.42"),
+                          count=1, client_order_id="c2", post_only=False)
+    assert bodies[0]["post_only"] is True
+    assert bodies[1]["post_only"] is False
     await ex.close()

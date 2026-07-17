@@ -15,6 +15,7 @@ import ssl
 import time
 import uuid
 from decimal import Decimal
+from email.utils import parsedate_to_datetime
 from typing import AsyncIterator, Callable, Optional
 
 import aiohttp
@@ -22,7 +23,8 @@ import certifi
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 
-from .base import BookTop, ExchangeAdapter, Fill, MarketInfo, Order, Side
+from .base import BookTop, ExchangeAdapter, Fill, MarketInfo, MarketLifecycle, Order, Side
+from ..fees import FeeSchedule, compute_fee
 
 log = logging.getLogger(__name__)
 
@@ -50,6 +52,33 @@ def _fmt_price(p: Decimal) -> str:
 
 def _fmt_count(c: int) -> str:
     return f"{c}.00"
+
+
+def skew_from_date_header(date_header: str, now: Optional[float] = None) -> float:
+    """Local minus server clock in seconds, from an HTTP Date header.
+    Positive means the local clock is AHEAD of the server."""
+    now = time.time() if now is None else now
+    server_ts = parsedate_to_datetime(date_header).timestamp()
+    return now - server_ts
+
+
+async def rest_clock_skew_seconds(rest_url: str, timeout: float = 10.0) -> float:
+    """2026-07-17 (DEPLOY): measure local-vs-Kalshi clock skew before trading.
+    RSA-PSS auth signs with local-ms timestamps, so a skewed VPS clock fails
+    auth opaquely (opaque 401s). Any unauthenticated GET against the REST base
+    returns a Date header — even a 404 carries one, so the status is ignored.
+    Raises on network failure; the caller decides (startup treats it as
+    advisory-only, never fatal)."""
+    ssl_ctx = ssl.create_default_context(cafile=certifi.where())
+    async with aiohttp.ClientSession(
+        timeout=aiohttp.ClientTimeout(total=timeout),
+        connector=aiohttp.TCPConnector(ssl=ssl_ctx),
+    ) as session:
+        async with session.get(rest_url) as resp:
+            date_header = resp.headers.get("Date")
+    if not date_header:
+        raise RuntimeError(f"no Date header from {rest_url}")
+    return skew_from_date_header(date_header)
 
 
 class KalshiAuth:
@@ -171,6 +200,8 @@ class KalshiExchange(ExchangeAdapter):
         rest_url: Optional[str] = None,
         ws_url: Optional[str] = None,
         write_tokens_per_second: float = 50.0,
+        fee_schedule: Optional[FeeSchedule] = None,
+        ws_recv_timeout_seconds: float = 30.0,
     ):
         if env not in ENVS:
             raise ValueError(f"env must be one of {list(ENVS)}, got {env!r}")
@@ -182,6 +213,14 @@ class KalshiExchange(ExchangeAdapter):
         self._write_bucket = TokenBucket(write_tokens_per_second)
         self.order_group_id: Optional[str] = None
         self._resubscribe = False
+        # 2026-07-17 (M2): max wait on a single ws receive. The resubscribe
+        # flag is only checked between messages, so on a quiet book a bench
+        # promotion could stay unsubscribed for hours; a receive timeout makes
+        # the flag responsive within ws_recv_timeout_seconds of silence.
+        self._ws_recv_timeout = ws_recv_timeout_seconds
+        # 2026-07-17 (M7): used to estimate a fill's fee when the ws payload
+        # doesn't carry the exchange's own fee_cost.
+        self.fee_schedule = fee_schedule
         # 2026-07-17 (C1): the exchange-global trading_paused_until backoff is
         # gone — per-market suspension (worker) + sweep cooloff (QuotingGate)
         # replaced it; see marketmaker.py.
@@ -311,6 +350,7 @@ class KalshiExchange(ExchangeAdapter):
         count: int,
         client_order_id: str,
         expiration_seconds: Optional[int] = None,
+        post_only: bool = True,
     ) -> Order:
         await self._write_bucket.acquire(10)
         body = {
@@ -320,7 +360,10 @@ class KalshiExchange(ExchangeAdapter):
             "count": _fmt_count(count),
             "price": _fmt_price(price),
             "time_in_force": "good_till_canceled",
-            "post_only": True,  # never take; a crossing quote is a bug, reject it
+            # 2026-07-17 (M4): post_only=False exists ONLY for the wind-down
+            # cross_1tick escalation (owner-gated, default off) — every other
+            # caller keeps the post-only invariant; a crossing quote is a bug.
+            "post_only": post_only,
             "self_trade_prevention_type": "maker",
             "cancel_order_on_pause": True,
         }
@@ -328,7 +371,15 @@ class KalshiExchange(ExchangeAdapter):
             body["expiration_time"] = int(time.time()) + expiration_seconds
         if self.order_group_id:
             body["order_group_id"] = self.order_group_id
-        data = await self._request("POST", "/portfolio/events/orders", body=body)
+        # 2026-07-17 (M6): create-order POSTs are NOT retried. Kalshi's
+        # OpenAPI spec (https://docs.kalshi.com/openapi.yaml, fetched
+        # 2026-07-17) documents idempotency only for transfers
+        # (client_transfer_id); duplicate client_order_id rejection on order
+        # create is NOT documented anywhere, so a retry after an ambiguous
+        # failure (timeout/5xx) could double-place. Failure handling instead:
+        # the worker reconciles by client_order_id before re-placing (see
+        # MarketWorker._reconcile's pending-adopt path).
+        data = await self._request("POST", "/portfolio/events/orders", body=body, retries=0)
         o = data.get("order", data)
         return Order(
             order_id=o.get("order_id", ""),
@@ -416,6 +467,25 @@ class KalshiExchange(ExchangeAdapter):
                 break
         return out
 
+    async def get_market_status(self, ticker: str) -> Optional[MarketLifecycle]:
+        """GET /markets/{ticker} lifecycle state (2026-07-17, M3). Kalshi's
+        lifecycle is open/active -> closed -> determined -> finalized; `result`
+        ("yes"/"no") is populated at determination. Settlement accounting keys
+        off determined/finalized with a result — the outcome is economically
+        locked at determination (finalized only times the cash movement)."""
+        try:
+            data = await self._request("GET", f"/markets/{ticker}", authed=False)
+        except Exception as e:  # noqa: BLE001 — a poll must never kill its loop
+            log.warning("get_market_status %s failed: %s", ticker, e)
+            return None
+        m = data.get("market", data)
+        return MarketLifecycle(
+            ticker=ticker,
+            status=m.get("status", ""),
+            result=m.get("result", ""),
+            close_time=m.get("close_time", ""),
+        )
+
     async def get_balance(self) -> Decimal:
         data = await self._request("GET", "/portfolio/balance")
         if "balance_dollars" in data:
@@ -481,10 +551,32 @@ class KalshiExchange(ExchangeAdapter):
                     )
                     backoff = 1.0
                     seqs: dict[int, int] = {}
-                    async for raw in ws:
+                    while True:
+                        # 2026-07-17 (M2): receive with a timeout so the
+                        # resubscribe flag is honored even on a silent book —
+                        # `async for raw in ws` only woke on a message, and a
+                        # bench promotion could wait hours for its subscription.
+                        # Heartbeat (10s) keeps the socket alive between ticks.
                         # Round 2 (adversarial): process the message we already
                         # pulled off the socket BEFORE honoring a resubscribe —
                         # the old order dropped an in-flight fill on the floor.
+                        try:
+                            raw = await asyncio.wait_for(
+                                ws.receive(), timeout=self._ws_recv_timeout
+                            )
+                        except asyncio.TimeoutError:
+                            if self._resubscribe:
+                                self._resubscribe = False
+                                log.info("resubscribing websocket with updated market set")
+                                raise _ResubscribeRequested()
+                            continue  # quiet book: keep waiting
+                        if raw.type in (
+                            aiohttp.WSMsgType.CLOSE,
+                            aiohttp.WSMsgType.CLOSING,
+                            aiohttp.WSMsgType.CLOSED,
+                            aiohttp.WSMsgType.ERROR,
+                        ):
+                            raise ConnectionResetError(f"ws closed: {raw.type}")
                         if raw.type != aiohttp.WSMsgType.TEXT:
                             if self._resubscribe:
                                 self._resubscribe = False
@@ -518,6 +610,22 @@ class KalshiExchange(ExchangeAdapter):
                             yp = _dec(m.get("yes_price_dollars"))
                             if yp is None and m.get("yes_price") is not None:
                                 yp = Decimal(m["yes_price"]) / 100
+                            # 2026-07-17 (M7): prefer the exchange's own
+                            # fee_cost (fixed-point dollars, per the asyncapi
+                            # fill schema); fall back to the configured formula
+                            # and say so — net-of-fee accounting must know
+                            # which number it's holding.
+                            reported = _dec(m.get("fee_cost"))
+                            if reported is not None:
+                                fee, fee_source = reported, "reported"
+                            elif self.fee_schedule is not None:
+                                fee = compute_fee(
+                                    self.fee_schedule, count,
+                                    yp or Decimal(0), bool(m.get("is_taker")),
+                                )
+                                fee_source = "computed"
+                            else:
+                                fee, fee_source = Decimal(0), "none"
                             _dispatch(
                                 on_fill,
                                 Fill(
@@ -530,6 +638,8 @@ class KalshiExchange(ExchangeAdapter):
                                     yes_price=yp or Decimal(0),
                                     is_taker=bool(m.get("is_taker")),
                                     ts_ms=m.get("ts_ms") or int(time.time() * 1000),
+                                    fee=fee,
+                                    fee_source=fee_source,
                                     raw=m,
                                 ),
                             )

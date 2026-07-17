@@ -35,10 +35,14 @@ class RiskParams:
 @dataclass
 class MarketState:
     position: int = 0  # signed yes-equivalent contracts
-    cash: Decimal = Decimal(0)  # cumulative signed cashflow from fills
+    cash: Decimal = Decimal(0)  # cumulative signed cashflow from fills (net of fees)
     last_mid: Optional[Decimal] = None
     fills: int = 0
+    fees: Decimal = Decimal(0)  # 2026-07-17 (M7): cumulative fees paid
     unvalued_seed: int = 0  # seeded contracts awaiting their first mid for a cost basis
+    # 2026-07-17 (M3): set by on_settlement — a settled market keeps its final
+    # mark but is excluded from periodic marking and the settlement poll.
+    settled: bool = False
 
 
 @dataclass
@@ -91,10 +95,16 @@ class RiskManager:
         else:
             st.unvalued_seed = position
 
-    def on_fill(self, ticker: str, signed_count: int, yes_price: Decimal) -> None:
+    def on_fill(
+        self, ticker: str, signed_count: int, yes_price: Decimal, fee: Decimal = Decimal("0")
+    ) -> None:
         st = self.markets.setdefault(ticker, MarketState())
         st.position += signed_count
         st.cash -= signed_count * yes_price  # buy costs cash, sell raises it
+        # 2026-07-17 (M7): the fee is a cash cost on every fill in every
+        # quadrant — PnL, high-water, and the kill switch are now net-of-fee.
+        st.cash -= fee
+        st.fees += fee
         st.fills += 1
 
     def on_mid(self, ticker: str, mid: Decimal) -> None:
@@ -106,6 +116,38 @@ class RiskManager:
             st.cash -= st.unvalued_seed * mid
             st.unvalued_seed = 0
         st.last_mid = mid
+
+    def on_settlement(
+        self, ticker: str, settlement: Decimal
+    ) -> tuple[int, Optional[Decimal], Decimal]:
+        """Realize a settled market's position into cash (2026-07-17, M3).
+
+        Kalshi pays `settlement` dollars per YES contract (1.00 on yes, 0.00
+        on no); our signed position is yes-equivalent, so a short (long NO)
+        receives |q| x (1 - settlement) — exactly q x settlement with q < 0.
+        No fee at settlement (fees were booked at fill time), so the fill-like
+        cash math stays net-of-fee. Returns (position, basis, realized_pnl)
+        for the settlement_realized event: basis is the net-of-fee average
+        entry (-cash/q) and realized_pnl = q x (settlement - basis), the
+        position's total contribution now frozen into cash."""
+        st = self.markets.setdefault(ticker, MarketState())
+        if st.unvalued_seed:
+            # A seeded position that never saw a mid: value it at settlement,
+            # same convention as the first-mid path — pre-existing inventory
+            # contributes zero session PnL.
+            st.cash -= st.unvalued_seed * settlement
+            st.unvalued_seed = 0
+        q = st.position
+        basis: Optional[Decimal] = None
+        realized = Decimal(0)
+        if q:
+            basis = -st.cash / q
+            realized = q * settlement + st.cash  # cash is -(cost + fees)
+            st.cash += q * settlement
+            st.position = 0
+        st.last_mid = settlement
+        st.settled = True
+        return q, basis, realized
 
     def pnl(self) -> Decimal:
         total = Decimal(0)

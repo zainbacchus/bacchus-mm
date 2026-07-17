@@ -23,11 +23,13 @@ class StubExchange:
         self.canceled: list[str] = []
         self.create_attempts = 0
         self.cancel_all_calls = 0
+        self.cancel_all_tickers: list[list[str] | None] = []
+        self.created: list[Order] = []
         self.fail_create: str | None = None
         self._n = 0
 
     async def create_order(self, ticker, side, price, count, client_order_id,
-                           expiration_seconds=None):
+                           expiration_seconds=None, post_only=True):
         self.create_attempts += 1
         if self.fail_create:
             raise RuntimeError(self.fail_create)
@@ -35,6 +37,7 @@ class StubExchange:
         o = Order(order_id=f"o{self._n}", client_order_id=client_order_id,
                   ticker=ticker, side=side, price=price, count=count)
         self.resting[o.order_id] = o
+        self.created.append(o)
         return o
 
     async def cancel_order(self, order_id):
@@ -43,6 +46,7 @@ class StubExchange:
 
     async def cancel_all_orders(self, tickers=None):
         self.cancel_all_calls += 1
+        self.cancel_all_tickers.append(tickers)
         n = len(self.resting)
         self.resting.clear()
         return n
@@ -66,6 +70,7 @@ def _setup(tmp_path, tickers=("MKT",)):
 
 
 def _events_of(events: EventLog, type_: str) -> list[dict]:
+    events.flush()  # 2026-07-17 (M1): events writes are batched now
     rows = events.db.execute(
         "SELECT ticker, payload FROM events WHERE type=?", (type_,)
     ).fetchall()
@@ -270,3 +275,123 @@ def test_gate_cooloff_expiry_with_explicit_clock():
     gate.note_pause_rejection(ts=1500.0)
     assert gate.pause_rejections_recent(900, ts=1901.0) == 1
     assert gate.pause_rejections_recent(900, ts=2401.0) == 0
+
+
+# ----------------------------------------- H2: sweep safety net is scoped
+
+@pytest.mark.asyncio
+async def test_sweep_cancel_all_scoped_to_managed_tickers(tmp_path):
+    """2026-07-17 (H2): the post-sweep cancel-all safety net passes the
+    managed ticker set (workers + held positions), not the whole account —
+    a second strategy sharing the account keeps its orders."""
+    events, risk, gate, ex, workers = _setup(tmp_path, ("M1", "M2"))
+    for w in workers.values():
+        await w._requote()
+    ex.resting.clear()
+    report = await reconcile_pass(ex, workers, risk, events, gate)
+    assert report.sweep
+    assert ex.cancel_all_calls == 1
+    assert ex.cancel_all_tickers[0] == ["M1", "M2"]
+    events.close()
+
+
+# ----------------------------- M6: ambiguous create -> client_order_id reconcile
+
+@pytest.mark.asyncio
+async def test_ambiguous_create_adopted_on_next_cycle(tmp_path):
+    """2026-07-17 (M6): the create POST died ambiguously (timeout/5xx) but the
+    order DID land exchange-side. Instead of re-placing (a double-place), the
+    worker finds it by client_order_id after create_adopt_delay and adopts
+    it: exposure registered, order tracked, no new create."""
+    events, risk, gate, ex, workers = _setup(tmp_path)
+    w = workers["MKT"]
+    w.cfg = WorkerConfig(create_adopt_delay=0.01)
+    landed: list[Order] = []
+    failed = False
+
+    async def flaky_create(ticker, side, price, count, client_order_id,
+                           expiration_seconds=None, post_only=True):
+        nonlocal failed
+        if not failed:
+            failed = True
+            # Exchange-side success, caller-visible failure (the response died).
+            o = await StubExchange.create_order(
+                ex, ticker, side, price, count, client_order_id,
+                expiration_seconds=expiration_seconds, post_only=post_only,
+            )
+            landed.append(o)
+            raise TimeoutError("response lost")
+        return await StubExchange.create_order(
+            ex, ticker, side, price, count, client_order_id,
+            expiration_seconds=expiration_seconds, post_only=post_only,
+        )
+
+    ex.create_order = flaky_create
+    await w._requote()
+    assert w.bid_order is None  # caller saw a failure
+    assert len(landed) == 1  # ...but the bid order is live exchange-side
+    assert _events_of(events, "order_placement_unknown")
+    await w._requote()  # inside the adopt delay: no new create attempted
+    assert len(landed) == 1
+    await asyncio.sleep(0.02)
+    await w._requote()
+    assert len(landed) == 1  # adopted, NOT re-placed
+    assert w.bid_order is not None and w.bid_order.order_id == landed[0].order_id
+    assert risk.resting[("MKT", "bid")] == landed[0].count
+    assert _events_of(events, "order_adopted")
+    events.close()
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_create_confirmed_lost_replaces(tmp_path):
+    """2026-07-17 (M6): the create genuinely never landed — after the adopt
+    delay the worker confirms it by client_order_id and places fresh (exactly
+    one live order, never two)."""
+    events, risk, gate, ex, workers = _setup(tmp_path)
+    w = workers["MKT"]
+    w.cfg = WorkerConfig(create_adopt_delay=0.01)
+    real_create = ex.create_order
+    calls = 0
+
+    async def dead_create(ticker, side, price, count, client_order_id,
+                          expiration_seconds=None, post_only=True):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise TimeoutError("never reached the exchange")
+        return await real_create(ticker, side, price, count, client_order_id,
+                                 expiration_seconds=expiration_seconds,
+                                 post_only=post_only)
+
+    ex.create_order = dead_create
+    await w._requote()  # bid fails ambiguously; ask places normally
+    assert w.bid_order is None
+    assert calls == 2
+    await asyncio.sleep(0.02)
+    await w._requote()  # bid confirmed lost -> one fresh placement; ask kept
+    assert calls == 3
+    assert w.bid_order is not None
+    assert len(ex.resting) == 2  # bid + ask, no double-place
+    assert _events_of(events, "order_placement_confirmed_lost")
+    events.close()
+
+
+@pytest.mark.asyncio
+async def test_definitive_4xx_rejection_does_not_park(tmp_path):
+    """A 4xx is a definitive rejection (the order is NOT live): plain
+    order_rejected, no pending-adopt bookkeeping."""
+    events, risk, gate, ex, workers = _setup(tmp_path)
+    w = workers["MKT"]
+    from bacchus_mm.exchange.kalshi import KalshiApiError
+
+    async def reject(ticker, side, price, count, client_order_id,
+                     expiration_seconds=None, post_only=True):
+        raise KalshiApiError(400, "invalid price")
+
+    ex.create_order = reject
+    await w._requote()
+    assert w.bid_order is None
+    assert not w._pending_create
+    assert _events_of(events, "order_rejected")
+    assert not _events_of(events, "order_placement_unknown")
+    events.close()

@@ -11,16 +11,29 @@ Tables:
   mids      — mid marks per market (on quote decisions + periodic)
   pnl_marks — equity curve for the session
   kv        — cross-session key/value state (2026-07-17: cumulative PnL chain)
+
+2026-07-17 (M1) write path: the firehose (events) and mids are queued in
+memory and flushed in ONE transaction every flush_seconds or every
+flush_batch rows, whichever first — the old commit+fsync per row produced
+145k rows / 62MB in 4 days at 8 markets and would stall the loop at 15-20.
+synchronous=NORMAL is safe under WAL (crash loses at most the last flush,
+which the JSONL mirror still holds). Everything stays on the caller's thread
+(the single asyncio loop); there are no writer threads. Money-side tables
+(fills, pnl_marks, venue_marks, kv) keep synchronous commits: they are rare,
+and the fill-dedup seed / kill-switch chain must never read stale state.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import time
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
+
+log = logging.getLogger(__name__)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS events (
@@ -40,7 +53,8 @@ CREATE TABLE IF NOT EXISTS fills (
     signed_count INTEGER NOT NULL,
     yes_price REAL NOT NULL,
     is_taker INTEGER NOT NULL,
-    mid_at_fill REAL
+    mid_at_fill REAL,
+    fee REAL NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_fills_ticker_ts ON fills(ticker, ts_ms);
 CREATE TABLE IF NOT EXISTS mids (
@@ -77,6 +91,21 @@ CREATE TABLE IF NOT EXISTS kv (
 );
 """
 
+_EVENTS_SQL = (
+    "INSERT INTO events (ts_ms, session_id, type, ticker, payload) VALUES (?,?,?,?,?)"
+)
+_MIDS_SQL = "INSERT INTO mids (ts_ms, ticker, mid, bid, ask) VALUES (?,?,?,?,?)"
+
+
+def ensure_schema_upgrades(db: sqlite3.Connection) -> None:
+    """Defensive ALTERs for DBs created before a column existed (2026-07-17,
+    M7: fills.fee). Shared with analyze.py, which opens the DB without an
+    EventLog and must not crash on a pre-M7 file."""
+    cols = {r[1] for r in db.execute("PRAGMA table_info(fills)")}
+    if cols and "fee" not in cols:  # empty cols -> no fills table yet, leave it
+        db.execute("ALTER TABLE fills ADD COLUMN fee REAL NOT NULL DEFAULT 0")
+        db.commit()
+
 
 def _jsonable(v: Any) -> Any:
     if isinstance(v, Decimal):
@@ -89,15 +118,101 @@ def _jsonable(v: Any) -> Any:
 
 
 class EventLog:
-    def __init__(self, directory: str | Path, session_id: str):
+    def __init__(
+        self,
+        directory: str | Path,
+        session_id: str,
+        flush_seconds: float = 1.0,
+        flush_batch: int = 500,
+        events_keep_days: int = 14,
+        clock: Callable[[], float] = time.monotonic,
+        on_event: Optional[Callable[[], None]] = None,
+    ):
         self.dir = Path(directory)
         self.dir.mkdir(parents=True, exist_ok=True)
         self.session_id = session_id
+        # 2026-07-17 (DEPLOY): optional liveness hook, fired on every emit —
+        # main.py points this at the health endpoint's heartbeat. Public so it
+        # can be attached after construction (the health state is built later).
+        self.on_event = on_event
         self.db = sqlite3.connect(self.dir / "bacchus.db")
         self.db.execute("PRAGMA journal_mode=WAL")
+        # 2026-07-17 (M1): WAL already survives crashes; FULL's per-commit
+        # fsync was the amplification. NORMAL syncs at checkpoint time only.
+        self.db.execute("PRAGMA synchronous=NORMAL")
         self.db.executescript(SCHEMA)
+        self._migrate()
         self._jsonl_day: Optional[str] = None
         self._jsonl = None
+        # 2026-07-17 (M1): batched-write state. `clock` is injected in tests
+        # (monotonic in prod) — flush cadence must not depend on wall time.
+        self._flush_seconds = float(flush_seconds)
+        self._flush_batch = int(flush_batch)
+        self._clock = clock
+        self._pending_events: list[tuple] = []
+        self._pending_mids: list[tuple] = []
+        self._last_flush = clock()
+        self._events_keep_days = int(events_keep_days)
+        self._last_prune_day: Optional[str] = None
+        # Retention runs once at startup, then daily inside flush().
+        self.prune_events()
+
+    def _migrate(self) -> None:
+        ensure_schema_upgrades(self.db)
+
+    # ------------------------------------------------------------ batching
+
+    def _enqueue(self, kind: str, params: tuple) -> None:
+        if kind == "events":
+            self._pending_events.append(params)
+        else:
+            self._pending_mids.append(params)
+        pending = len(self._pending_events) + len(self._pending_mids)
+        if pending >= self._flush_batch or (
+            self._clock() - self._last_flush >= self._flush_seconds
+        ):
+            self.flush()
+
+    def flush(self) -> None:
+        """One transaction for everything queued. Idempotent; safe to call
+        from the trading loop's flusher task and from close()."""
+        if not self._pending_events and not self._pending_mids:
+            self._last_flush = self._clock()
+            self._maybe_prune_daily()
+            return
+        if self._pending_events:
+            self.db.executemany(_EVENTS_SQL, self._pending_events)
+            self._pending_events.clear()
+        if self._pending_mids:
+            self.db.executemany(_MIDS_SQL, self._pending_mids)
+            self._pending_mids.clear()
+        self.db.commit()
+        self._last_flush = self._clock()
+        self._maybe_prune_daily()
+
+    # ------------------------------------------------------------ retention
+
+    def prune_events(self, now_ms: Optional[int] = None) -> int:
+        """2026-07-17 (M1): prune ONLY the events firehose; the JSONL files
+        are the archive and fills/mids/pnl_marks/venue_marks/kv are kept
+        forever (money state and markout history). events_keep_days <= 0
+        disables pruning."""
+        if self._events_keep_days <= 0:
+            return 0
+        now = now_ms if now_ms is not None else int(time.time() * 1000)
+        cutoff = now - self._events_keep_days * 86_400_000
+        cur = self.db.execute("DELETE FROM events WHERE ts_ms < ?", (cutoff,))
+        self.db.commit()
+        self._last_prune_day = time.strftime("%Y%m%d")
+        self.emit("events_pruned", deleted=cur.rowcount, keep_days=self._events_keep_days)
+        return cur.rowcount
+
+    def _maybe_prune_daily(self) -> None:
+        day = time.strftime("%Y%m%d")  # wall clock: retention is calendar-based
+        if day != self._last_prune_day:
+            self.prune_events()
+
+    # ---------------------------------------------------------------- jsonl
 
     def _jsonl_handle(self):
         day = time.strftime("%Y%m%d")
@@ -109,6 +224,12 @@ class EventLog:
         return self._jsonl
 
     def emit(self, type_: str, ticker: Optional[str] = None, **payload: Any) -> None:
+        # 2026-07-17 (DEPLOY): the health heartbeat must never break logging.
+        if self.on_event is not None:
+            try:
+                self.on_event()
+            except Exception:  # noqa: BLE001
+                pass
         ts_ms = int(time.time() * 1000)
         record = {
             "ts_ms": ts_ms,
@@ -117,14 +238,13 @@ class EventLog:
             "ticker": ticker,
             **_jsonable(payload),
         }
+        # The JSONL mirror stays immediate — it is the durable firehose.
         handle = self._jsonl_handle()
         handle.write(json.dumps(record, separators=(",", ":")) + "\n")
         handle.flush()
-        self.db.execute(
-            "INSERT INTO events (ts_ms, session_id, type, ticker, payload) VALUES (?,?,?,?,?)",
-            (ts_ms, self.session_id, type_, ticker, json.dumps(_jsonable(payload))),
+        self._enqueue(
+            "events", (ts_ms, self.session_id, type_, ticker, json.dumps(_jsonable(payload)))
         )
-        self.db.commit()
 
     def record_fill(
         self,
@@ -136,11 +256,17 @@ class EventLog:
         is_taker: bool,
         mid_at_fill: Optional[Decimal],
         ts_ms: Optional[int] = None,
+        fee: Optional[Decimal] = None,
+        fee_source: str = "none",
     ) -> None:
+        """Synchronous commit on purpose (2026-07-17, M1): fills are rare and
+        the next session's fill-dedup set is seeded from this table — a fill
+        lost to an unflushed queue could double-count on ws redelivery."""
         ts = ts_ms or int(time.time() * 1000)
+        fee_d = fee if fee is not None else Decimal(0)
         self.db.execute(
             "INSERT INTO fills (ts_ms, session_id, trade_id, order_id, ticker, signed_count,"
-            " yes_price, is_taker, mid_at_fill) VALUES (?,?,?,?,?,?,?,?,?)",
+            " yes_price, is_taker, mid_at_fill, fee) VALUES (?,?,?,?,?,?,?,?,?,?)",
             (
                 ts,
                 self.session_id,
@@ -151,6 +277,7 @@ class EventLog:
                 float(yes_price),
                 int(is_taker),
                 float(mid_at_fill) if mid_at_fill is not None else None,
+                float(fee_d),
             ),
         )
         self.db.commit()
@@ -163,13 +290,17 @@ class EventLog:
             yes_price=yes_price,
             is_taker=is_taker,
             mid_at_fill=mid_at_fill,
+            fee=fee_d,
+            # "reported" = exchange's own number (Kalshi fee_cost); "computed"
+            # = local formula estimate; "none" = no schedule configured.
+            fee_source=fee_source,
         )
 
     def record_mid(
         self, ticker: str, mid: Decimal, bid: Optional[Decimal], ask: Optional[Decimal]
     ) -> None:
-        self.db.execute(
-            "INSERT INTO mids (ts_ms, ticker, mid, bid, ask) VALUES (?,?,?,?,?)",
+        self._enqueue(
+            "mids",
             (
                 int(time.time() * 1000),
                 ticker,
@@ -178,7 +309,6 @@ class EventLog:
                 float(ask) if ask is not None else None,
             ),
         )
-        self.db.commit()
 
     def record_venue_mark(
         self,
@@ -231,6 +361,9 @@ class EventLog:
         return row[0] if row else None
 
     def kv_set(self, key: str, value: str) -> None:
+        """Synchronous on purpose (2026-07-17, M1): one rare row carrying the
+        kill-switch equity chain — it must be durable the moment it returns,
+        not at the next flush."""
         self.db.execute(
             "INSERT INTO kv (key, value) VALUES (?, ?) "
             "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -248,6 +381,22 @@ class EventLog:
         return {r[0] for r in rows if r[0]}
 
     def close(self) -> None:
+        # 2026-07-17 (M1): drain the queue before closing — normal shutdown,
+        # halt, and exception paths in main.py all funnel through here. A
+        # failed final flush must not crash teardown; JSONL still holds it.
+        try:
+            self.flush()
+        except Exception:  # noqa: BLE001
+            log.exception(
+                "final eventlog flush failed — %d queued rows live only in JSONL",
+                len(self._pending_events) + len(self._pending_mids),
+            )
         if self._jsonl:
             self._jsonl.close()
+        try:
+            # Keep the WAL from growing unbounded on disk; best-effort — a
+            # concurrent reader (analyze) simply limits how much truncates.
+            self.db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        except Exception:  # noqa: BLE001
+            pass
         self.db.close()

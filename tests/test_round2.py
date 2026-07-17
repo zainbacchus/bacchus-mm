@@ -91,6 +91,7 @@ async def test_reverting_bounce_is_false_alarm_via_real_trip(tmp_path):
     w.top = BookTop("MKT", Decimal("0.39"), 10, Decimal("0.41"), 10, 0)  # mid 0.40
     await w._requote()
     assert w._guard_trips == 0  # false alarm — a bounce must not count
+    events.flush()  # 2026-07-17 (M1): events writes are batched now
     n = events.db.execute(
         "SELECT COUNT(*) FROM events WHERE type='guard_false_alarm'").fetchone()[0]
     assert n == 1
@@ -225,6 +226,7 @@ async def test_foreign_order_is_logged_never_canceled(tmp_path):
     report = await reconcile_pass(ex, {"MKT": w}, risk, events, gate,
                                   sweep_cooloff_seconds=900, ttl_seconds=900)
     assert report.orphaned == [] and "manual1" not in ex.canceled
+    events.flush()  # 2026-07-17 (M1): events writes are batched now
     n = events.db.execute(
         "SELECT COUNT(*) FROM events WHERE type='order_foreign'").fetchone()[0]
     assert n == 1

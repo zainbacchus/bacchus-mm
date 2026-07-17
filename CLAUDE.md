@@ -139,6 +139,58 @@ Environment quirks:
   logged mid, so repricing during downtime lands in the chain. Observe
   (dry-run) sessions never write the chain.
 
+## 2026-07-17 P1 batch (scale-safety + deploy layer — read before touching eventlog/fees/settlement/deploy)
+
+Implemented from REVIEW-2026-07-17.md §4 P1 table. 172 tests passing. Branch
+`p1-scaling-batch` (stacked on `p0-review-fixes-2026-07-17`).
+
+- **DB writes are batched** (`eventlog.py`): `events`+`mids` flush every
+  `logging.flush_seconds: 1.0` or `logging.flush_batch: 500` rows, one
+  transaction per flush, `synchronous=NORMAL`. **fills / pnl_marks /
+  venue_marks / kv stay synchronous** — fill-dedup seeding and kill-switch
+  chaining must never read unflushed state (editor: do not move these to the
+  batch path). `close()` drains + checkpoints WAL. Retention:
+  `logging.events_keep_days: 14` prunes ONLY the SQLite events table at
+  startup + daily; JSONL files are the archive, all other tables are forever.
+- **Fee model** (`fees.py`): Kalshi schedule = ceil(0.07 × C × P × (1−P)) to
+  the cent, taker-only (kalshi.com/docs/kalshi-fee-schedule.pdf). The ws fill
+  payload's `fee_cost` is preferred (`fee_source: reported`), formula is the
+  fallback (`computed`). risk books `cash -= fee` (PnL, high-water, kill
+  switch are now net-of-fee); fills table has a `fee` column with a migration
+  applied by both EventLog and analyze on open. `analyze markouts` reports
+  gross AND net — **net is the S2-gate number**. Quoting spreads are still
+  gross by design; fee-aware sizing is a policy decision for the S1→S2 review.
+- **Settlement & close**: `marks_loop` writes marks every
+  `marks_tick_seconds: 60` even without book deltas; `close_reaper_hours: 12`
+  pulls quotes and stops re-quoting (positions route to wind-down);
+  `settlement_poll_seconds: 900` realizes settlement into risk
+  (`risk.on_settlement`, yes-equivalent, net-of-fee, `settlement_realized`
+  event) when a held market determines/finalizes.
+- **Ws resilience**: receive wrapped in `ws_recv_timeout_seconds: 30` so
+  resubscribe requests can't starve on quiet books.
+- **Order group is fail-closed on prod**: prod+--live aborts startup if the
+  order group can't be created (`risk.allow_no_order_group: true` overrides).
+- **create_order never retries ambiguous failures** (Kalshi docs don't
+  promise client_order_id dedup — verified 2026-07-17): timeout/5xx →
+  `order_placement_unknown`, then adopt-if-resting by client_order_id or
+  confirmed-lost replace. Never two live orders.
+- **Wind-down urgency**: `winddown_distress` alert (unfilled ≥30 min or ≥5c
+  adverse, throttled 1/15min). `winddown_escalation: cross_1tick` is PLUMBED
+  BUT DEFAULT `none` — flipping it weakens the post-only invariant and is an
+  explicit owner decision; the fee model gates whether crossing is worth it.
+- **Cancels are scoped** (`reconcile.managed_tickers()`): startup sweep, kill
+  switch, shutdown cancel only tickers we manage — a second strategy can share
+  the account. `cancel-all` CLI stays account-wide on purpose (panic tool).
+- **Deploy layer**: `Dockerfile` (uv --frozen, non-root, /app/data volume),
+  `fly.toml` (iad region, [checks] on /health, [[restart]] always, mount
+  `bacchus_data`), `docs/deploy.md` runbook (~$2.10/mo). `/health` (health.py)
+  → 200 JSON / 503 when halted or last event >300s — payload key whitelist is
+  pinned by test (no secrets/positions). Containers use env vars:
+  `HEALTH_PORT` auto-enables health, `BACCHUS_LIVE_ENABLED` is the container
+  half of the two-key prod gate (config.local.yaml is not in the image),
+  `KALSHI_PRIVATE_KEY` inline PEM already supported. Startup clock-skew check
+  warns >2s vs the REST Date header (RSA-PSS auth is local-ms).
+
 ## Conventions
 
 - Prices: Decimal dollars in [0,1] on the YES side. Positions: signed
