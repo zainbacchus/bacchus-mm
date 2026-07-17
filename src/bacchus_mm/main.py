@@ -17,7 +17,9 @@ import logging
 import signal
 import sys
 import time
+import traceback
 import uuid
+from decimal import Decimal
 from pathlib import Path
 
 from .config import Config
@@ -25,8 +27,9 @@ from .crossvenue import VenuePair, run_recorder
 from .eventlog import EventLog
 from .exchange.base import Fill
 from .exchange.kalshi import KalshiAuth, KalshiExchange
-from .marketmaker import MarketWorker, WorkerConfig
-from .risk import RiskManager
+from .marketmaker import MarketWorker, QuotingGate, WorkerConfig
+from .reconcile import reconcile_loop
+from .risk import RiskManager, RiskParams
 from .selector import select_markets
 
 log = logging.getLogger("bacchus_mm")
@@ -60,6 +63,125 @@ def _build_exchange(cfg: Config, need_auth: bool) -> KalshiExchange:
     return KalshiExchange(
         env=cfg.env, auth=auth, write_tokens_per_second=cfg.write_tokens_per_second
     )
+
+
+def supervise(
+    task: asyncio.Task, name: str, stop_event: asyncio.Event, events: EventLog
+) -> asyncio.Task:
+    """Fail-stop task supervision (2026-07-17, H3). Every coroutine used to be
+    fire-and-forget, so a dead task was a silent zombie — a dead risk_loop
+    quietly disables the kill switch, a dead stream consumer leaves the bot
+    quoting blind. On an unexpected exception: emit `task_died` and set
+    stop_event so the normal shutdown path runs. Cancellation during shutdown
+    (and any failure after stop_event is already set) is expected, not death.
+    """
+
+    def _done(t: asyncio.Task) -> None:
+        if t.cancelled():
+            return  # normal shutdown path
+        exc = t.exception()
+        if exc is None:
+            return  # clean return (loops shouldn't, but benign)
+        log.error("task %s died: %r", name, exc, exc_info=exc)
+        if stop_event.is_set():
+            return  # teardown races are expected once shutdown began
+        try:
+            events.emit(
+                "task_died", task=name, error=repr(exc),
+                traceback="".join(traceback.format_exception(exc)),
+            )
+        except Exception:  # noqa: BLE001 — the DB may be what killed it
+            pass
+        stop_event.set()
+
+    task.add_done_callback(_done)
+    return task
+
+
+class FillDispatcher:
+    """Fill fan-out with dedup and failure isolation (2026-07-17, H4 + H5).
+
+    Dedup: Kalshi redelivers recent fills after a ws resubscribe; trade_id is
+    the exchange's unique fill id, so a seen-set seeded from the fills table
+    at startup drops redeliveries before they double-count position/PnL. A
+    fill with a missing/empty trade id is processed normally — silently
+    dropping a real fill would understate PnL, which is worse than the
+    double-count the dedup exists to prevent.
+
+    Ordering and isolation: risk.on_fill (the money state) applies first;
+    record_fill is best-effort — a full/locked DB must neither desync the
+    worker's order bookkeeping nor escape into kalshi.py's stream loop, where
+    it used to be misreported as a ws disconnect; worker.order_filled always
+    runs.
+    """
+
+    def __init__(self, workers: dict[str, MarketWorker], risk: RiskManager, events: EventLog):
+        self.workers = workers
+        self.risk = risk
+        self.events = events
+        self.seen: set[str] = events.known_trade_ids()
+
+    def __call__(self, f: Fill) -> None:
+        tid = f.trade_id or ""
+        if tid and tid in self.seen:
+            self.events.emit(
+                "fill_duplicate_ignored", ticker=f.ticker, trade_id=tid,
+                order_id=f.order_id, signed_count=f.signed_count,
+            )
+            log.warning("duplicate fill ignored: %s %s (%+d)", f.ticker, tid, f.signed_count)
+            return
+        w = self.workers.get(f.ticker)
+        mid = w.current_mid() if w else None
+        self.risk.on_fill(f.ticker, f.signed_count, f.yes_price)
+        if tid:
+            # The fill is on the books now; ignore any redelivery even if the
+            # record below fails.
+            self.seen.add(tid)
+        try:
+            self.events.record_fill(
+                f.ticker, f.trade_id, f.order_id, f.signed_count,
+                f.yes_price, f.is_taker, mid, f.ts_ms,
+            )
+        except Exception:  # noqa: BLE001 — DB full/locked; stdlib log is the record
+            log.exception("record_fill failed (trade %s) — fill applied, log row lost", tid)
+            try:
+                self.events.emit(
+                    "fill_record_failed", ticker=f.ticker, trade_id=tid,
+                    order_id=f.order_id, signed_count=f.signed_count,
+                )
+            except Exception:  # noqa: BLE001 — the DB is the broken thing
+                pass
+        if w:
+            w.order_filled(f.order_id, abs(f.signed_count))
+        log.info(
+            "FILL %s %+d @ %.2f (taker=%s) pos=%d pnl=$%.2f",
+            f.ticker, f.signed_count, f.yes_price, f.is_taker,
+            self.risk.markets[f.ticker].position,
+            self.risk.cumulative_pnl,  # 2026-07-17: cumulative, not session
+        )
+
+
+def load_chained_risk(params: RiskParams, state_dir: Path, events: EventLog) -> RiskManager:
+    """RiskManager with the cross-session equity chain loaded from kv
+    (2026-07-17, FIX-PnL). First run on a pre-upgrade DB: no kv rows -> offset
+    0 and high_water anchors at 0 per the Pass-1 design (pre-upgrade losses
+    intentionally not counted — see the comment in risk.py)."""
+    offset = Decimal(events.kv_get("cumulative_pnl") or "0")
+    hw = events.kv_get("high_water")
+    return RiskManager(
+        params=params,
+        state_dir=state_dir,
+        cumulative_offset=offset,
+        high_water=Decimal(hw) if hw else None,
+    )
+
+
+def persist_pnl_marks(events: EventLog, risk: RiskManager) -> None:
+    """Write the equity chain back to kv. str(Decimal) round-trips exactly —
+    money math stays Decimal."""
+    events.kv_set("cumulative_pnl", str(risk.cumulative_pnl))
+    events.kv_set("high_water", str(risk.high_water))
+    risk.new_high_water_since_load = False
 
 
 async def cmd_markets(cfg: Config) -> None:
@@ -103,7 +225,8 @@ async def cmd_trade(cfg: Config, live: bool, dry_run: bool) -> None:
     ex = _build_exchange(cfg, need_auth=True)
     session_id = f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
     events = EventLog(cfg.data_dir, session_id)
-    risk = RiskManager(params=cfg.risk, state_dir=cfg.data_dir)
+    # 2026-07-17 (FIX-PnL): load the cross-session equity chain from kv.
+    risk = load_chained_risk(cfg.risk, cfg.data_dir, events)
 
     prior_halt = risk.check_halt_file()
     if prior_halt and not dry_run:
@@ -209,10 +332,17 @@ async def cmd_trade(cfg: Config, live: bool, dry_run: bool) -> None:
             fast_move_threshold=cfg.fast_move_threshold,
             fast_move_window=cfg.fast_move_window,
             fast_move_cooloff=cfg.fast_move_cooloff,
+            fast_move_spread_multiple=cfg.fast_move_spread_multiple,
+            fast_move_confirm_updates=cfg.fast_move_confirm_updates,
             guard_evict_trips=cfg.guard_evict_trips,
         )
+        # 2026-07-17 (C1): one session-global quoting gate shared by every
+        # worker, including wind-down workers and bench promotions.
+        gate = QuotingGate()
         for t in tickers:
-            workers[t] = MarketWorker(t, ex, cfg.strategy, risk, events, wcfg, dry_run=dry_run)
+            workers[t] = MarketWorker(
+                t, ex, cfg.strategy, risk, events, wcfg, dry_run=dry_run, gate=gate
+            )
         # Wind-down workers: every orphan position gets exit-only quotes until
         # flat — the bot never leaves inventory unmanaged (owner directive
         # 2026-07-16, after an evicted market's short ran 24c with no exit).
@@ -220,7 +350,7 @@ async def cmd_trade(cfg: Config, live: bool, dry_run: bool) -> None:
             if t not in workers and pos != 0:
                 workers[t] = MarketWorker(
                     t, ex, cfg.strategy, risk, events, wcfg,
-                    dry_run=dry_run, reduce_only=True,
+                    dry_run=dry_run, reduce_only=True, gate=gate,
                 )
                 events.emit("wind_down_started", ticker=t, position=pos)
                 log.info("wind-down worker started for orphan position %s (%+d)", t, pos)
@@ -237,21 +367,8 @@ async def cmd_trade(cfg: Config, live: bool, dry_run: bool) -> None:
                     events.record_mid(top.ticker, top.mid, top.bid, top.ask)
                     _orphan_mark[top.ticker] = time.monotonic()
 
-        def on_fill(f: Fill):
-            w = workers.get(f.ticker)
-            mid = w.current_mid() if w else None
-            risk.on_fill(f.ticker, f.signed_count, f.yes_price)
-            events.record_fill(
-                f.ticker, f.trade_id, f.order_id, f.signed_count,
-                f.yes_price, f.is_taker, mid, f.ts_ms,
-            )
-            if w:
-                w.order_filled(f.order_id, abs(f.signed_count))
-            log.info(
-                "FILL %s %+d @ %.2f (taker=%s) pos=%d pnl=$%.2f",
-                f.ticker, f.signed_count, f.yes_price, f.is_taker,
-                risk.markets[f.ticker].position, risk.pnl(),
-            )
+        # 2026-07-17 (H4/H5): dedup + failure-isolated fill fan-out.
+        on_fill = FillDispatcher(workers, risk, events)
 
         def active_tickers() -> list[str]:
             # Stream everything we quote, plus anything we still hold — evicted
@@ -283,10 +400,11 @@ async def cmd_trade(cfg: Config, live: bool, dry_run: bool) -> None:
                         if sub.ticker in workers:
                             continue
                         workers[sub.ticker] = MarketWorker(
-                            sub.ticker, ex, cfg.strategy, risk, events, wcfg, dry_run=dry_run
+                            sub.ticker, ex, cfg.strategy, risk, events, wcfg,
+                            dry_run=dry_run, gate=gate,
                         )
                         risk.seed_position(sub.ticker, positions.get(sub.ticker, 0), sub.mid)
-                        tasks.append(asyncio.create_task(workers[sub.ticker].run()))
+                        _spawn(workers[sub.ticker].run(), f"worker:{sub.ticker}")
                         events.emit(
                             "market_promoted", ticker=sub.ticker, replaces=t,
                             standby_remaining=len(standby),
@@ -297,12 +415,30 @@ async def cmd_trade(cfg: Config, live: bool, dry_run: bool) -> None:
                     else:
                         log.warning("standby bench empty; %s not replaced", t)
 
+        def _spawn(coro, name: str) -> None:
+            # 2026-07-17 (H3): every long-lived task runs supervised (fail-stop).
+            t = asyncio.create_task(coro, name=name)
+            supervise(t, name, stop_event, events)
+            tasks.append(t)
+
         async def risk_loop():
+            last_kv_persist = time.monotonic()
             while not stop_event.is_set():
                 await asyncio.sleep(5)
-                pnl = risk.pnl()
+                # 2026-07-17 (FIX-PnL): mark the CUMULATIVE equity curve, not the
+                # session-rebased one — rebasing understated true losses 2.9x
+                # across the first 8 sessions. (Column names kept for compat;
+                # session_high now carries the account high-water mark.)
+                pnl = risk.cumulative_pnl
                 dd = risk.drawdown()
-                events.record_pnl(pnl, risk.session_high, dd, risk.gross_contracts())
+                events.record_pnl(pnl, risk.high_water, dd, risk.gross_contracts())
+                # 2026-07-17 (FIX-PnL): persist the equity chain — immediately
+                # on a new account high-water (a crash must never lose the
+                # kill-switch reference peak), otherwise at most once a minute
+                # as cheap crash insurance for losses and stale values too.
+                if risk.new_high_water_since_load or time.monotonic() - last_kv_persist >= 60:
+                    persist_pnl_marks(events, risk)
+                    last_kv_persist = time.monotonic()
                 reason = risk.should_halt()
                 if reason and not risk.halted and not dry_run:
                     risk.halt(reason)
@@ -315,10 +451,23 @@ async def cmd_trade(cfg: Config, live: bool, dry_run: bool) -> None:
                         log.exception("cancel-all during halt failed — CHECK THE EXCHANGE UI")
                     stop_event.set()
 
-        tasks.append(asyncio.create_task(consume_stream()))
-        tasks.append(asyncio.create_task(risk_loop()))
-        tasks.append(asyncio.create_task(bench_loop()))
-        tasks += [asyncio.create_task(w.run()) for w in workers.values()]
+        _spawn(consume_stream(), "stream")
+        _spawn(risk_loop(), "risk_loop")
+        _spawn(bench_loop(), "bench_loop")
+        for t in list(workers):
+            _spawn(workers[t].run(), f"worker:{t}")
+        # 2026-07-17 (C1): one global resting-order reconcile task — see
+        # reconcile.py. Live mode only: observe must never cancel anything,
+        # and orphan-cancel assumes this process is the account's only writer
+        # (flock guarantees that locally).
+        if not dry_run:
+            _spawn(
+                reconcile_loop(
+                    ex, workers, risk, events, gate, stop_event,
+                    cfg.reconcile_seconds, cfg.sweep_cooloff_seconds,
+                ),
+                "reconcile",
+            )
 
         # Cross-venue recorder rides along whenever pairs are configured — one
         # command ingests everything. `bacchus-mm crossvenue` still runs it alone.
@@ -326,10 +475,9 @@ async def cmd_trade(cfg: Config, live: bool, dry_run: bool) -> None:
         xv_pairs = [VenuePair.from_config(p) for p in xv.get("pairs", [])]
         if xv_pairs:
             log.info("cross-venue recorder attached: %d pairs", len(xv_pairs))
-            tasks.append(
-                asyncio.create_task(
-                    run_recorder(xv_pairs, ex, events, float(xv.get("poll_seconds", 15)))
-                )
+            _spawn(
+                run_recorder(xv_pairs, ex, events, float(xv.get("poll_seconds", 15))),
+                "crossvenue",
             )
 
         await stop_event.wait()
@@ -355,6 +503,12 @@ async def cmd_trade(cfg: Config, live: bool, dry_run: bool) -> None:
                 log.exception("shutdown cancel-all failed — CHECK THE EXCHANGE UI")
         else:
             events.emit("session_stop", canceled=0, still_resting=0)
+        # 2026-07-17 (FIX-PnL): leave the equity chain durable on every exit —
+        # halt, signal, or plain shutdown.
+        try:
+            persist_pnl_marks(events, risk)
+        except Exception:  # noqa: BLE001
+            log.exception("failed to persist cumulative pnl on shutdown")
         events.close()
         await ex.close()
 
