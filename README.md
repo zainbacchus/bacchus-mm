@@ -8,6 +8,12 @@ Built around one idea: **every decision is logged with enough context that an
 LLM (or a human) can reconstruct and critique it later.** You run the bot; your
 logs become the dataset you iterate on.
 
+**In plain English:** it runs little currency-exchange booths inside prediction
+markets, earning pennies on the gap between buy and sell prices, thousands of
+times. The craft isn't making the pennies; it's avoiding getting run over by
+people who know something you don't. The bot handles that by picking boring
+markets, stepping aside when prices jump, and keeping a diary we audit.
+
 ## How it works
 
 - **Market selection** — scans open markets, filters to configured categories
