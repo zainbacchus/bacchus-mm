@@ -10,6 +10,7 @@ Tables:
   fills     — typed fills for fast joins
   mids      — mid marks per market (on quote decisions + periodic)
   pnl_marks — equity curve for the session
+  kv        — cross-session key/value state (2026-07-17: cumulative PnL chain)
 """
 
 from __future__ import annotations
@@ -66,6 +67,13 @@ CREATE TABLE IF NOT EXISTS pnl_marks (
     session_high REAL NOT NULL,
     drawdown REAL NOT NULL,
     gross_contracts INTEGER NOT NULL
+);
+-- 2026-07-17 (FIX-PnL): scratch kv store for cross-session state. Pass 2 uses
+-- keys "cumulative_pnl" and "high_water" to chain account equity across
+-- sessions instead of rebasing to zero at every session start.
+CREATE TABLE IF NOT EXISTS kv (
+    key TEXT PRIMARY KEY,
+    value TEXT
 );
 """
 
@@ -217,6 +225,27 @@ class EventLog:
             ),
         )
         self.db.commit()
+
+    def kv_get(self, key: str) -> Optional[str]:
+        row = self.db.execute("SELECT value FROM kv WHERE key = ?", (key,)).fetchone()
+        return row[0] if row else None
+
+    def kv_set(self, key: str, value: str) -> None:
+        self.db.execute(
+            "INSERT INTO kv (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value),
+        )
+        self.db.commit()
+
+    def known_trade_ids(self) -> set[str]:
+        """Every trade id in the fills table — seeds the fill dedup set
+        (2026-07-17, H5): after a ws resubscribe Kalshi redelivers recent
+        fills, and an unseeded set would double-count them."""
+        rows = self.db.execute(
+            "SELECT trade_id FROM fills WHERE trade_id IS NOT NULL"
+        ).fetchall()
+        return {r[0] for r in rows if r[0]}
 
     def close(self) -> None:
         if self._jsonl:

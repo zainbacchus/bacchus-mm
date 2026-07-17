@@ -117,7 +117,9 @@ class ExchangeAdapter(abc.ABC):
     async def cancel_all_orders(self, tickers: Optional[list[str]] = None) -> int: ...
 
     @abc.abstractmethod
-    async def get_resting_orders(self) -> list[Order]: ...
+    async def get_resting_orders(self, ticker: Optional[str] = None) -> list[Order]:
+        """All resting orders, optionally narrowed to one ticker (the reconcile
+        loop uses the filter for cheap per-ticker confirmation fetches)."""
 
     @abc.abstractmethod
     async def get_positions(self) -> dict[str, int]:

@@ -36,6 +36,14 @@ class StrategyParams:
     sigma_halflife_seconds: float = 600.0
     min_half_spread: Decimal = Decimal("0.01")
     max_half_spread: Decimal = Decimal("0.05")
+    # 2026-07-17 (H1, owner-approved policy A): join the best level whenever the
+    # book pays >= 2c of spread and joining keeps >= 1c of reservation edge.
+    # Old calibration (2c margin / 3c min spread) fired on 2.7% of 124k live
+    # quote decisions; 55% of quotes rested behind the touch, fill rate 0.26%.
+    # Judgment gate (REVIEW-2026-07-17 S5, S1): revert if markout@+600s
+    # < -0.5c/contract over >= 60 fills.
+    join_margin: Decimal = Decimal("0.01")
+    min_book_spread: Decimal = Decimal("0.02")
     quote_size: int = 5
     min_price: Decimal = Decimal("0.10")
     max_price: Decimal = Decimal("0.90")
@@ -91,13 +99,17 @@ def apply_join_best(
     quotes: "QuotePair",
     book_bid: Optional[Decimal],
     book_ask: Optional[Decimal],
-    min_book_spread: Decimal = Decimal("0.03"),
-    join_margin: Decimal = Decimal("0.02"),
+    min_book_spread: Decimal = Decimal("0.02"),
+    join_margin: Decimal = Decimal("0.01"),
 ) -> "QuotePair":
     """Queue competitiveness (day-2 audit: ~75% of quotes rested BEHIND the best
     level and near-never filled). When the model price is behind best and the
     book spread still pays, join the best level — never improve past it, and
-    only when joining keeps >= join_margin of edge vs the reservation price."""
+    only when joining keeps >= join_margin of edge vs the reservation price.
+
+    2026-07-17 (H1 policy A): defaults loosened to 2c book / 1c margin — the
+    prior band fired on 2.7% of decisions with a 0.26% fill rate. Revert gate:
+    markout@+600s < -0.5c/contract over >= 60 fills (REVIEW-2026-07-17 S5)."""
     if book_bid is None or book_ask is None or book_ask - book_bid < min_book_spread:
         return quotes
     if (

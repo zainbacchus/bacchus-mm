@@ -84,19 +84,49 @@ def test_vol_estimator_floors_and_updates():
 
 def test_join_best_joins_when_edge_remains():
     from bacchus_mm.strategy.avellaneda_stoikov import apply_join_best
-    q = quotes(mid="0.50")  # bid ~0.47, ask ~0.53, reservation 0.50
+    q = quotes(mid="0.50")  # bid ~0.46, ask ~0.54, reservation 0.50
     out = apply_join_best(q, Decimal("0.48"), Decimal("0.52"))
     assert out.bid == Decimal("0.48") and out.joined_bid  # joined best bid, 2c edge kept
     assert out.ask == Decimal("0.52") and out.joined_ask
 
 
-def test_join_best_refuses_without_edge_or_tight_book():
+# 2026-07-17 (H1 policy A): join fires on any book >= 2c with >= 1c of
+# reservation edge — 2.7% join rate and 0.26% fill rate said the old band was
+# inert. Gate: revert if markout@+600s < -0.5c/contract over >= 60 fills.
+def test_join_best_policy_a_fires_at_2c_3c_5c_books():
+    from bacchus_mm.strategy.avellaneda_stoikov import apply_join_best
+    for bid, ask in (("0.49", "0.51"), ("0.49", "0.52"), ("0.48", "0.53")):
+        q = quotes(mid="0.50")
+        out = apply_join_best(q, Decimal(bid), Decimal(ask))
+        assert out.joined_bid and out.bid == Decimal(bid), (bid, ask)
+        assert out.joined_ask and out.ask == Decimal(ask), (bid, ask)
+
+
+def test_join_best_never_joins_sub_2c_book():
     from bacchus_mm.strategy.avellaneda_stoikov import apply_join_best
     q = quotes(mid="0.50")
-    # book best bid at 0.49: joining leaves only 1c edge vs reservation -> refuse
-    out = apply_join_best(q, Decimal("0.49"), Decimal("0.53"))
-    assert not out.joined_bid and out.bid < Decimal("0.49")
-    # tight book (2c spread) -> never join
-    q2 = quotes(mid="0.50")
-    out2 = apply_join_best(q2, Decimal("0.49"), Decimal("0.51"))
-    assert not out2.joined_bid and not out2.joined_ask
+    out = apply_join_best(q, Decimal("0.495"), Decimal("0.505"))  # 1c book
+    assert not out.joined_bid and not out.joined_ask
+    assert out.bid < Decimal("0.495") and out.ask > Decimal("0.505")
+
+
+def test_join_best_never_crosses_the_touch():
+    from bacchus_mm.strategy.avellaneda_stoikov import apply_join_best
+    # Model bid already AT/ABOVE best bid: join must not push past the touch.
+    q = quotes(mid="0.50")
+    out = apply_join_best(q, Decimal("0.45"), Decimal("0.47"))  # model bid 0.46 > 0.45
+    assert out.bid == Decimal("0.46") and not out.joined_bid
+    # Joined quotes sit exactly on the touch, never through it.
+    for bid, ask in (("0.49", "0.51"), ("0.48", "0.53")):
+        out = apply_join_best(quotes(mid="0.50"), Decimal(bid), Decimal(ask))
+        assert out.bid <= Decimal(bid) and out.ask >= Decimal(ask)
+
+
+def test_join_best_refuses_when_reservation_edge_below_margin():
+    from bacchus_mm.strategy.avellaneda_stoikov import apply_join_best
+    # inv=2 pulls reservation to ~0.446; book bid 0.44 leaves only 0.6c edge.
+    q = quotes(mid="0.50", inv=2)
+    out = apply_join_best(q, Decimal("0.44"), Decimal("0.47"))
+    assert not out.joined_bid and out.bid < Decimal("0.44")
+    # The other side still has >= 1c edge, so it joins.
+    assert out.joined_ask and out.ask == Decimal("0.47")
