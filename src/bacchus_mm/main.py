@@ -213,6 +213,17 @@ async def cmd_trade(cfg: Config, live: bool, dry_run: bool) -> None:
         )
         for t in tickers:
             workers[t] = MarketWorker(t, ex, cfg.strategy, risk, events, wcfg, dry_run=dry_run)
+        # Wind-down workers: every orphan position gets exit-only quotes until
+        # flat — the bot never leaves inventory unmanaged (owner directive
+        # 2026-07-16, after an evicted market's short ran 24c with no exit).
+        for t, pos in positions.items():
+            if t not in workers and pos != 0:
+                workers[t] = MarketWorker(
+                    t, ex, cfg.strategy, risk, events, wcfg,
+                    dry_run=dry_run, reduce_only=True,
+                )
+                events.emit("wind_down_started", ticker=t, position=pos)
+                log.info("wind-down worker started for orphan position %s (%+d)", t, pos)
 
         _orphan_mark: dict[str, float] = {}
 
@@ -264,7 +275,7 @@ async def cmd_trade(cfg: Config, live: bool, dry_run: bool) -> None:
             while not stop_event.is_set():
                 await asyncio.sleep(30)
                 for t, w in list(workers.items()):
-                    if not w.evicted or t in replaced:
+                    if not w.evicted or t in replaced or w.reduce_only_origin:
                         continue
                     replaced.add(t)
                     while standby:

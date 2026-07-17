@@ -67,3 +67,58 @@ async def test_worker_evicts_after_repeated_trips(tmp_path):
     # further requotes are inert once evicted
     await w._requote()
     events.close()
+
+
+@pytest.mark.asyncio
+async def test_reduce_only_worker_quotes_exit_side_only(tmp_path):
+    events = EventLog(tmp_path, "t")
+    risk = RiskManager(params=RiskParams(), state_dir=tmp_path)
+    risk.on_fill("MKT", -2, Decimal("0.38"))  # short 2
+    w = MarketWorker("MKT", exchange=None, strategy=StrategyParams(), risk=risk,
+                     events=events, cfg=WorkerConfig(), dry_run=True, reduce_only=True)
+    w.top = BookTop("MKT", Decimal("0.60"), 10, Decimal("0.64"), 10, 0)
+    risk.on_mid("MKT", Decimal("0.62"))
+    await w._requote()
+    import json
+    row = events.db.execute(
+        "SELECT payload FROM events WHERE type='quote_decision' ORDER BY ts_ms DESC LIMIT 1"
+    ).fetchone()
+    d = json.loads(row[0])
+    assert d["ask"] is None and d["ask_size"] == 0      # short: never sell more
+    assert d["bid"] is not None and d["bid_size"] <= 2  # exit bid, capped at position
+    events.close()
+
+
+@pytest.mark.asyncio
+async def test_reduce_only_worker_goes_inert_when_flat(tmp_path):
+    events = EventLog(tmp_path, "t")
+    risk = RiskManager(params=RiskParams(), state_dir=tmp_path)
+    w = MarketWorker("MKT", exchange=None, strategy=StrategyParams(), risk=risk,
+                     events=events, cfg=WorkerConfig(), dry_run=True, reduce_only=True)
+    w.top = BookTop("MKT", Decimal("0.40"), 10, Decimal("0.44"), 10, 0)
+    await w._requote()
+    assert w._wound_down and w.evicted
+    n = events.db.execute("SELECT COUNT(*) FROM events WHERE type='wind_down_complete'").fetchone()[0]
+    assert n == 1
+    events.close()
+
+
+@pytest.mark.asyncio
+async def test_evicted_with_position_becomes_wind_down(tmp_path):
+    events = EventLog(tmp_path, "t")
+    risk = RiskManager(params=RiskParams(), state_dir=tmp_path)
+    risk.on_fill("MKT", 3, Decimal("0.30"))  # long 3
+    w = MarketWorker("MKT", exchange=None, strategy=StrategyParams(), risk=risk,
+                     events=events, cfg=WorkerConfig(guard_evict_trips=1), dry_run=True)
+    w.top = BookTop("MKT", Decimal("0.30"), 10, Decimal("0.34"), 10, 0)
+    risk.on_mid("MKT", Decimal("0.32"))
+    w.guard._blocked_until = _t.monotonic() + 60
+    await w._requote()
+    assert w.evicted and w.reduce_only and not w.reduce_only_origin
+    import json
+    row = events.db.execute(
+        "SELECT payload FROM events WHERE type='quote_decision' ORDER BY ts_ms DESC LIMIT 1"
+    ).fetchone()
+    d = json.loads(row[0])
+    assert d["bid"] is None and d["ask"] is not None  # long: exit ask only, even in cooloff
+    events.close()

@@ -87,6 +87,7 @@ class MarketWorker:
         events: EventLog,
         cfg: WorkerConfig,
         dry_run: bool = False,
+        reduce_only: bool = False,
     ):
         self.ticker = ticker
         self.exchange = exchange
@@ -95,6 +96,12 @@ class MarketWorker:
         self.events = events
         self.cfg = cfg
         self.dry_run = dry_run
+        # reduce_only: quote only the side that shrinks the position (wind-down
+        # worker for orphan positions). reduce_only_origin marks workers born
+        # this way so the bench never "replaces" them.
+        self.reduce_only = reduce_only
+        self.reduce_only_origin = reduce_only
+        self._wound_down = False
         self.vol = VolEstimator(strategy.sigma_halflife_seconds, strategy.sigma_floor)
         self.guard = FastMoveGuard(cfg.fast_move_threshold, cfg.fast_move_window, cfg.fast_move_cooloff)
         self._guard_announced = False
@@ -151,9 +158,24 @@ class MarketWorker:
         top = self.top
         if top is None or top.mid is None:
             return
-        if self.evicted:
+        inventory = self.risk.markets.get(self.ticker)
+        q = inventory.position if inventory else 0
+
+        if self.reduce_only and q == 0:
+            # Wind-down complete: cancel anything resting and go inert.
+            self.bid_order = await self._reconcile(Side.BID, self.bid_order, None, 0)
+            self.ask_order = await self._reconcile(Side.ASK, self.ask_order, None, 0)
+            if not self._wound_down:
+                self._wound_down = True
+                self.evicted = True  # drops us from the stream on next resubscribe
+                self.events.emit("wind_down_complete", ticker=self.ticker)
+                log.info("wind-down complete: %s is flat", self.ticker)
             return
-        if self.guard.blocked():
+        if self.evicted and not self.reduce_only:
+            return
+
+        blocked = self.guard.blocked()
+        if blocked:
             if not self._guard_announced:
                 self._guard_trips += 1
                 self.events.emit(
@@ -161,26 +183,34 @@ class MarketWorker:
                     mid=top.mid, cooloff=self.cfg.fast_move_cooloff, trip=self._guard_trips,
                 )
                 self._guard_announced = True
-            self.bid_order = await self._reconcile(Side.BID, self.bid_order, None, 0)
-            self.ask_order = await self._reconcile(Side.ASK, self.ask_order, None, 0)
-            if self._guard_trips >= self.cfg.guard_evict_trips:
-                self.evicted = True
-                self.events.emit(
-                    "market_evicted", ticker=self.ticker,
-                    reason=f"{self._guard_trips} guard trips", trips=self._guard_trips,
-                )
-                log.warning(
-                    "EVICTED %s for this session: %d fast-move guard trips",
-                    self.ticker, self._guard_trips,
-                )
+                if self._guard_trips >= self.cfg.guard_evict_trips and not self.evicted:
+                    self.evicted = True
+                    if q != 0:
+                        # Never abandon inventory: evicted-with-position becomes
+                        # a wind-down worker instead of going dark.
+                        self.reduce_only = True
+                    self.events.emit(
+                        "market_evicted", ticker=self.ticker,
+                        reason=f"{self._guard_trips} guard trips", trips=self._guard_trips,
+                        wind_down=self.reduce_only,
+                    )
+                    log.warning(
+                        "EVICTED %s: %d guard trips%s", self.ticker, self._guard_trips,
+                        " (wind-down mode: exit quotes only)" if self.reduce_only else "",
+                    )
+            if q == 0 and not self.reduce_only:
+                self.bid_order = await self._reconcile(Side.BID, self.bid_order, None, 0)
+                self.ask_order = await self._reconcile(Side.ASK, self.ask_order, None, 0)
+                if not self.evicted:
+                    self._dirty.set()  # resume when the cool-off ends
                 return
-            self._dirty.set()  # keep ticking so we resume when the cool-off ends
-            return
-        self._guard_announced = False
-        mid = top.mid
-        inventory = self.risk.markets.get(self.ticker)
-        q = inventory.position if inventory else 0
+            # Inventory during a cool-off: keep the EXIT side alive (verified
+            # day-2 finding: freezing exits during a crash blocked the one
+            # profitable escape), drop only the accumulating side below.
+        else:
+            self._guard_announced = False
 
+        mid = top.mid
         quotes = compute_quotes(
             mid=mid,
             inventory=q,
@@ -188,7 +218,17 @@ class MarketWorker:
             sigma=self.vol.sigma,
             p=self.strategy,
         )
-        quotes = apply_join_best(quotes, top.bid, top.ask)
+        if not blocked:
+            quotes = apply_join_best(quotes, top.bid, top.ask)
+        if self.reduce_only or blocked:
+            # Exit-only quoting: suppress the side that would grow |position|,
+            # cap the exit size at the position so we never flip through flat.
+            if q > 0:
+                quotes.bid, quotes.bid_size = None, 0
+                quotes.ask_size = min(quotes.ask_size, q) if quotes.ask is not None else 0
+            elif q < 0:
+                quotes.ask, quotes.ask_size = None, 0
+                quotes.bid_size = min(quotes.bid_size, -q) if quotes.bid is not None else 0
         self.events.emit(
             "quote_decision",
             ticker=self.ticker,
