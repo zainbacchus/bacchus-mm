@@ -12,6 +12,17 @@ exchange:
   # Kalshi Basic tier allows 100 write tokens/s (order=10, cancel=2).
   # We self-limit well below that.
   write_tokens_per_second: 50
+  # 2026-07-17 (C1): the websocket carries no order-status channel, so
+  # exchange-initiated cancels are invisible without polling — maintenance
+  # pauses (all our orders carry cancel_order_on_pause; 657 trading_is_paused
+  # rejections in 4 days) and order-group trips both cancel everything. Every
+  # reconcile_seconds the bot diffs exchange-resting orders against worker
+  # refs: vanished orders release their risk exposure and get re-quoted;
+  # untracked resting orders are cancelled. If EVERYTHING quoted vanishes in
+  # one pass (group trip or maintenance), quoting cools off globally for
+  # sweep_cooloff_seconds, then re-arms automatically (not the kill switch).
+  reconcile_seconds: 45
+  sweep_cooloff_seconds: 900
 
 selector:
   # Calm categories only: news-driven categories (sports, crypto prices) will
@@ -41,6 +52,15 @@ strategy:
   sigma_halflife_seconds: 600
   min_half_spread: 0.01
   max_half_spread: 0.05
+  # 2026-07-17 (H1, owner-approved policy A): join the best level whenever the
+  # book pays >= 2c of spread and joining keeps >= 1c of reservation edge.
+  # Rationale: the old band (2c margin / 3c min spread) fired on 2.7% of 124k
+  # live quote decisions; 55% of quotes rested behind the touch and the fill
+  # rate was 0.26%. We trade thinner edge for queue position.
+  # Judgment gate (REVIEW-2026-07-17 §5, S1): revert if markout@+600s
+  # < -0.5c/contract over >= 60 fills.
+  join_margin: 0.01
+  min_book_spread: 0.02
   quote_size: 5 # contracts per side
   requote_min_interval: 1.0 # seconds between requote evaluations per market
   requote_tolerance: 0.01 # don't churn orders for < 1 tick of movement
@@ -52,6 +72,16 @@ strategy:
   fast_move_threshold: 0.03
   fast_move_window: 30 # seconds
   fast_move_cooloff: 180 # seconds
+  # 2026-07-17 (H6): the guard was hair-triggered — any single mid step >= 3c
+  # tripped, but on 6-10c-wide books one pulled level moves the mid that much
+  # (266 trips / 12 evictions in 4 days; KXRAINNYCM alone 65+34 pulls), evicting
+  # exactly the wide books the selector prefers. Now: effective threshold =
+  # max(fast_move_threshold, fast_move_spread_multiple x book spread); a 1x-2x
+  # move must persist across fast_move_confirm_updates same-direction updates
+  # (a >= 2x jump trips immediately); a trip counts toward eviction only if the
+  # move persists past the cool-off, else guard_false_alarm is logged.
+  fast_move_spread_multiple: 0.75
+  fast_move_confirm_updates: 2
   # A market tripping the guard this many times in one session is evicted for
   # the session (2026-07-15: gas-CPI tripped 51x in 2.9h = pure cool-off churn).
   guard_evict_trips: 8
@@ -60,7 +90,7 @@ risk:
   max_contracts_per_market: 20
   max_notional_per_market: 100 # dollars of worst-case exposure per market
   max_gross_notional: 600 # dollars across all markets
-  kill_switch_drawdown: 250 # halt everything at this drawdown from session high
+  kill_switch_drawdown: 250 # halt at this drawdown from the ACCOUNT high-water (2026-07-17)
   order_group_contracts_per_15s: 40 # exchange-side runaway limit (Kalshi order group)
 
 logging:

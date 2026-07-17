@@ -148,6 +148,21 @@ def fill_signed_count(side: str, action: str, count: int) -> int:
     return count if long_yes else -count
 
 
+def _dispatch(callback: Callable, payload) -> None:
+    """Invoke a stream callback with bug isolation (2026-07-17, H4): an
+    exception in caller code (fill/book handlers — DB writes, worker
+    bookkeeping) must NOT reach the transport error handler, where it would
+    be misreported as a ws disconnect and trigger a pointless
+    reconnect/resync. Log loudly via stdlib logging; keep the connection."""
+    try:
+        callback(payload)
+    except Exception:  # noqa: BLE001
+        log.exception(
+            "stream callback %s raised — callback bug, connection kept",
+            getattr(callback, "__name__", repr(callback)),
+        )
+
+
 class KalshiExchange(ExchangeAdapter):
     def __init__(
         self,
@@ -167,7 +182,9 @@ class KalshiExchange(ExchangeAdapter):
         self._write_bucket = TokenBucket(write_tokens_per_second)
         self.order_group_id: Optional[str] = None
         self._resubscribe = False
-        self.trading_paused_until = 0.0
+        # 2026-07-17 (C1): the exchange-global trading_paused_until backoff is
+        # gone — per-market suspension (worker) + sweep cooloff (QuotingGate)
+        # replaced it; see marketmaker.py.
 
     # ---------------------------------------------------------------- REST
 
@@ -340,11 +357,13 @@ class KalshiExchange(ExchangeAdapter):
             await self.cancel_order(o.order_id)
         return len(orders)
 
-    async def get_resting_orders(self) -> list[Order]:
+    async def get_resting_orders(self, ticker: Optional[str] = None) -> list[Order]:
         out: list[Order] = []
         cursor = None
         while True:
             params = {"status": "resting", "limit": 200}
+            if ticker is not None:
+                params["ticker"] = ticker
             if cursor:
                 params["cursor"] = cursor
             data = await self._request("GET", "/portfolio/orders", params=params)
@@ -463,11 +482,14 @@ class KalshiExchange(ExchangeAdapter):
                     backoff = 1.0
                     seqs: dict[int, int] = {}
                     async for raw in ws:
-                        if self._resubscribe:
-                            self._resubscribe = False
-                            log.info("resubscribing websocket with updated market set")
-                            raise _ResubscribeRequested()
+                        # Round 2 (adversarial): process the message we already
+                        # pulled off the socket BEFORE honoring a resubscribe —
+                        # the old order dropped an in-flight fill on the floor.
                         if raw.type != aiohttp.WSMsgType.TEXT:
+                            if self._resubscribe:
+                                self._resubscribe = False
+                                log.info("resubscribing websocket with updated market set")
+                                raise _ResubscribeRequested()
                             continue
                         msg = json.loads(raw.data)
                         mtype = msg.get("type")
@@ -483,20 +505,21 @@ class KalshiExchange(ExchangeAdapter):
                             book = books.get(m["market_ticker"])
                             if book:
                                 book.apply_snapshot(m)
-                                on_book_top(book.top())
+                                _dispatch(on_book_top, book.top())
                         elif mtype == "orderbook_delta":
                             m = msg["msg"]
                             book = books.get(m["market_ticker"])
                             if book:
                                 book.apply_delta(m)
-                                on_book_top(book.top())
+                                _dispatch(on_book_top, book.top())
                         elif mtype == "fill":
                             m = msg["msg"]
                             count = int(Decimal(str(m.get("count_fp") or m.get("count") or 0)))
                             yp = _dec(m.get("yes_price_dollars"))
                             if yp is None and m.get("yes_price") is not None:
                                 yp = Decimal(m["yes_price"]) / 100
-                            on_fill(
+                            _dispatch(
+                                on_fill,
                                 Fill(
                                     trade_id=m.get("trade_id", ""),
                                     order_id=m.get("order_id", ""),
@@ -508,10 +531,14 @@ class KalshiExchange(ExchangeAdapter):
                                     is_taker=bool(m.get("is_taker")),
                                     ts_ms=m.get("ts_ms") or int(time.time() * 1000),
                                     raw=m,
-                                )
+                                ),
                             )
                         elif mtype == "error":
                             log.error("ws error message: %s", msg)
+                        if self._resubscribe:
+                            self._resubscribe = False
+                            log.info("resubscribing websocket with updated market set")
+                            raise _ResubscribeRequested()
                         yield
             except asyncio.CancelledError:
                 raise
@@ -538,4 +565,7 @@ class KalshiApiError(RuntimeError):
 
 
 def new_client_order_id() -> str:
-    return str(uuid.uuid4())
+    # "bmm-" tags our orders so the reconcile loop can distinguish bot orders
+    # from anything the owner places by hand in the Kalshi UI (Round 2: the
+    # orphan-cancel path only ever touches bmm- tagged orders).
+    return f"bmm-{uuid.uuid4()}"

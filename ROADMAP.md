@@ -7,6 +7,15 @@
   manually-mapped Kalshi ↔ Polymarket pairs (public data, no credentials) into
   the `venue_marks` table; `analyze divergence` reports how often and how far
   the venues disagree. Use `pm-find` to discover Polymarket slugs for mapping.
+- **P0 review batch (2026-07-17, from REVIEW-2026-07-17.md)** — risk-reducing
+  orders always approved; resting-order-aware caps; cumulative cross-session
+  PnL + account-equity kill switch (kv-chained); exchange-reconcile loop with
+  sweep detection + cooloff (order-group trips / maintenance cancels no longer
+  invisible, no more blind re-arm); fail-stop task supervision; fill dedup +
+  fill-dispatch isolation; join-best policy A (margin 1c / min book 2c);
+  fast-move guard confirmation (spread-scaled threshold, 2-update persistence,
+  trips count only if the move persists past cooloff). See CLAUDE.md 2026-07-17
+  section for the invariants an editing session must not regress. 91 tests.
 
 ## Phase B — Polymarket as a fair-value signal (future)
 
@@ -67,17 +76,22 @@ Hard prerequisites before any of this:
 ## Deep-review queue (2026-07-16 workflow findings, deferred deliberately)
 
 - Sigma warmup seeding + realized-vol floor from own mids (A-S is effectively a
-  constant 2.86c quoter today — 85.6% of decisions at the sigma floor); wait
-  for post-join-best fill data before touching spread math.
+  constant 2.86c quoter today — 62.9% of decisions at the sigma floor, 85.4%
+  live). Join-best policy A shipped 2026-07-17 — spread-math changes are now
+  gated on the S1 evidence gate (REVIEW §5): markout@+600s ≥ −0.5c/contract
+  over ≥60 fills post-policy-A.
 - Flow-ranked selection: rank candidates by realized taker flow, not spread
   (economics dim: order flow, not spread width, is the binding constraint on
   income; current picks trade a handful of times/day). Overnight dead zone:
   all 10 first-day fills landed 07:31-18:22.
-- Account-equity kill switch (replace per-session rebase); startup worker
-  jitter before scaling past ~10 markets (startup burst is 80% of the write
-  budget). (Reduce-only orphan exits: DONE 2026-07-16, wind-down workers.)
-- Stability-gated guard re-entry (mid-range must settle before re-quoting);
-  count trips only when the move persists past cooloff.
+- Account-equity kill switch: DONE 2026-07-17 (cumulative PnL chained via kv
+  table, high-water persisted; first run anchors high_water = offset so
+  pre-upgrade losses don't trip). Startup worker jitter before scaling past
+  ~10 markets (startup burst is 80% of the write budget). (Reduce-only orphan
+  exits: DONE 2026-07-16, wind-down workers.)
+- Stability-gated guard re-entry: DONE 2026-07-17 (spread-scaled threshold,
+  2-update confirmation, trips count only when the move persists past
+  cooloff; false alarms logged as guard_false_alarm).
 - Phase B lead/lag: remeasure on near-50c contracts around FOMC/CPI catalysts
   (current Fed pairs at 0.95/0.05 cannot reprice — data uninformative).
 
@@ -89,7 +103,9 @@ Hard prerequisites before any of this:
   2026-07-16: lid-close sleep blacked out ~7h of quoting across two episodes
   in one day; laptop hosting is now the biggest single uptime cost.
 - Reconcile fills via REST on websocket reconnect (fills during the <=15min
-  pre-TTL sleep window are invisible until restart).
+  pre-TTL sleep window are invisible until restart). Partially done 2026-07-17:
+  reconcile.py resyncs ORDER state every 45s live; historical FILLS during a
+  disconnect are still unreconciled (dedup groundwork in place).
 - Order amend instead of cancel/replace where it saves rate-limit tokens.
 - Settlement handling mid-session (positions in settled markets currently
   just stop marking).

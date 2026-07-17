@@ -54,3 +54,20 @@ def test_summary_edge_at_fill(tmp_path, capsys):
     run_report(tmp_path, "summary", hours=1)
     out = capsys.readouterr().out
     assert "+0.0200" in out
+
+
+def test_kv_round_trip(tmp_path):
+    # 2026-07-17 (FIX-PnL): cross-session persistence for cumulative_pnl /
+    # high_water, consumed by the Pass-2 chaining in main.py.
+    log = EventLog(tmp_path, "sess-1")
+    assert log.kv_get("cumulative_pnl") is None
+    log.kv_set("cumulative_pnl", "-3.43")
+    assert log.kv_get("cumulative_pnl") == "-3.43"
+    log.kv_set("cumulative_pnl", "-2.90")  # overwrite
+    assert log.kv_get("cumulative_pnl") == "-2.90"
+    log.kv_set("high_water", "0.12")
+    assert log.kv_get("high_water") == "0.12"
+    log.close()
+    log2 = EventLog(tmp_path, "sess-2")  # survives a reopen of the same db
+    assert log2.kv_get("cumulative_pnl") == "-2.90"
+    log2.close()
