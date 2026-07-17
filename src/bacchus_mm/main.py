@@ -647,13 +647,33 @@ async def cmd_cancel_all(cfg: Config) -> None:
 
 
 def cmd_halt_clear(cfg: Config) -> None:
+    """Acknowledge a kill-switch halt. Clearing also REBASES the persisted
+    high-water mark to current cumulative PnL — "halt-clear" means "I accept
+    this loss level; protect me from here." Without the rebase, cumulative
+    drawdown is still >= the threshold at the next start and the bot re-halts
+    immediately with no recovery path (the 2026-07-17 halt-loop trap)."""
     risk = RiskManager(params=cfg.risk, state_dir=cfg.data_dir)
     reason = risk.check_halt_file()
     if reason is None:
         print("no HALTED marker present")
         return
     risk.clear_halt()
+    events = EventLog(cfg.data_dir, f"halt-clear-{time.strftime('%Y%m%d-%H%M%S')}")
+    try:
+        cum = events.kv_get("cumulative_pnl") or "0"
+        old_hw = events.kv_get("high_water") or "0"
+        events.kv_set("high_water", cum)
+        events.emit(
+            "halt_cleared", reason=reason,
+            old_high_water=old_hw, rebased_high_water=cum,
+        )
+    finally:
+        events.close()
     print(f"cleared halt: {reason}")
+    print(
+        f"kill switch re-armed: high-water rebased ${old_hw} -> ${cum}; "
+        f"drawdown now measures from the acknowledged level"
+    )
 
 
 def cli() -> None:

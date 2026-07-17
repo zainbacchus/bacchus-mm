@@ -117,6 +117,16 @@ Environment quirks:
 - Scope ruff to `uv run ruff check src tests` — analysis_snapshot/ is
   forensic scratch and fails lint by design.
 
+## Standing judgment gates (check at every review)
+
+- Join policy A (owner-approved 2026-07-17): join_margin 1c / min_book_spread
+  2c. REVERT to 2c/3c if markout@+600s < -0.5c/contract over >= 60 fills.
+  quote_decision logs joined_bid/joined_ask — measure joined vs model-priced
+  fills separately before concluding.
+- Guard H6 recalibration: watch guard_false_alarm vs confirmed guard_trip
+  ratio; if confirmed trips still evict calm markets, tune
+  fast_move_spread_multiple before touching the base threshold.
+
 ## Conventions
 
 - Prices: Decimal dollars in [0,1] on the YES side. Positions: signed

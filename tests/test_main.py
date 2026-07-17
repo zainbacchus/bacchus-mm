@@ -216,3 +216,56 @@ def test_persist_pnl_marks_round_trip_and_flag_reset(tmp_path):
     reloaded = load_chained_risk(RiskParams(), tmp_path, events)
     assert reloaded.cumulative_pnl == Decimal("1.00")
     events.close()
+
+
+def test_halt_clear_rebases_high_water(tmp_path):
+    # 2026-07-17 halt-loop trap: cumulative drawdown persists across restarts,
+    # so clearing the HALTED marker without rebasing the high-water mark meant
+    # instant re-halt. halt-clear now anchors high_water at current cumulative
+    # PnL — the operator accepts the loss and re-arms from there.
+    from decimal import Decimal
+
+    from bacchus_mm.config import Config
+    from bacchus_mm.eventlog import EventLog
+    from bacchus_mm.main import cmd_halt_clear, load_chained_risk
+    from bacchus_mm.risk import RiskManager
+
+    cfg = Config.load(tmp_path)  # defaults; data_dir = tmp_path/data
+    cfg.data_dir.mkdir(parents=True, exist_ok=True)
+
+    seed = EventLog(cfg.data_dir, "seed")
+    seed.kv_set("cumulative_pnl", "-12.50")
+    seed.kv_set("high_water", "0.75")
+    seed.close()
+    RiskManager(params=cfg.risk, state_dir=cfg.data_dir).halt("test halt")
+
+    cmd_halt_clear(cfg)
+
+    check = EventLog(cfg.data_dir, "check")
+    assert check.kv_get("high_water") == "-12.50"  # rebased to cumulative pnl
+    n = check.db.execute(
+        "SELECT COUNT(*) FROM events WHERE type='halt_cleared'"
+    ).fetchone()[0]
+    assert n == 1
+    risk = load_chained_risk(cfg.risk, cfg.data_dir, check)
+    assert risk.check_halt_file() is None
+    assert risk.drawdown() == Decimal("0")  # re-armed: no instant re-halt
+    assert risk.should_halt() is None
+    check.close()
+
+
+def test_halt_clear_noop_without_marker(tmp_path, capsys):
+    from bacchus_mm.config import Config
+    from bacchus_mm.eventlog import EventLog
+    from bacchus_mm.main import cmd_halt_clear
+
+    cfg = Config.load(tmp_path)
+    cfg.data_dir.mkdir(parents=True, exist_ok=True)
+    seed = EventLog(cfg.data_dir, "seed")
+    seed.kv_set("high_water", "0.75")
+    seed.close()
+    cmd_halt_clear(cfg)
+    assert "no HALTED marker" in capsys.readouterr().out
+    check = EventLog(cfg.data_dir, "check")
+    assert check.kv_get("high_water") == "0.75"  # untouched without a halt
+    check.close()
