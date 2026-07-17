@@ -142,7 +142,10 @@ def report_incidents(conn: sqlite3.Connection, hours: float) -> None:
     since = _since_ms(hours)
     rows = conn.execute(
         "SELECT ts_ms, type, ticker, payload FROM events WHERE ts_ms >= ? AND type IN "
-        "('halt','error','order_rejected','session_start','session_stop') ORDER BY ts_ms",
+        "('halt','error','order_rejected','session_start','session_stop',"
+        # 2026-07-17 (C1/H3/H5): reconcile, supervision, and fill-integrity incidents
+        "'order_vanished','order_orphaned','exchange_sweep_detected','quoting_suspended',"
+        "'task_died','fill_duplicate_ignored','fill_record_failed') ORDER BY ts_ms",
         (since,),
     ).fetchall()
     print(f"== incidents & sessions (last {hours:g}h, {len(rows)} events) ==")

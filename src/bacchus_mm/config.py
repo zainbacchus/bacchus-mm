@@ -61,6 +61,8 @@ class Config:
     data_dir: Path
     write_tokens_per_second: float
     order_group_contracts_per_15s: int
+    reconcile_seconds: int
+    sweep_cooloff_seconds: int
     selector: SelectorParams
     strategy: StrategyParams
     risk: RiskParams
@@ -70,6 +72,8 @@ class Config:
     fast_move_threshold: Decimal
     fast_move_window: float
     fast_move_cooloff: float
+    fast_move_spread_multiple: Decimal
+    fast_move_confirm_updates: int
     guard_evict_trips: int
     selector_refresh_minutes: int
     raw: dict = field(repr=False, default_factory=dict)
@@ -115,6 +119,8 @@ class Config:
             min_price=selector.min_price,
             max_price=selector.max_price,
             tick=_dec(stra, "tick", Decimal("0.01")),
+            join_margin=_dec(stra, "join_margin", Decimal("0.01")),
+            min_book_spread=_dec(stra, "min_book_spread", Decimal("0.02")),
         )
         risk_params = RiskParams(
             max_contracts_per_market=int(risk.get("max_contracts_per_market", 20)),
@@ -128,6 +134,9 @@ class Config:
             data_dir=root / data.get("logging", {}).get("dir", "data"),
             write_tokens_per_second=float(exch.get("write_tokens_per_second", 50)),
             order_group_contracts_per_15s=int(risk.get("order_group_contracts_per_15s", 40)),
+            # 2026-07-17 (C1): resting-order reconcile cadence + sweep cooloff
+            reconcile_seconds=int(exch.get("reconcile_seconds", 45)),
+            sweep_cooloff_seconds=int(exch.get("sweep_cooloff_seconds", 900)),
             selector=selector,
             strategy=strategy,
             risk=risk_params,
@@ -137,6 +146,8 @@ class Config:
             fast_move_threshold=_dec(stra, "fast_move_threshold", Decimal("0.03")),
             fast_move_window=float(stra.get("fast_move_window", 30)),
             fast_move_cooloff=float(stra.get("fast_move_cooloff", 180)),
+            fast_move_spread_multiple=_dec(stra, "fast_move_spread_multiple", Decimal("0.75")),
+            fast_move_confirm_updates=int(stra.get("fast_move_confirm_updates", 2)),
             guard_evict_trips=int(stra.get("guard_evict_trips", 8)),
             selector_refresh_minutes=int(sel.get("refresh_minutes", 30)),
             raw=data,
