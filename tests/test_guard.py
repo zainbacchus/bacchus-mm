@@ -91,11 +91,14 @@ def test_reversal_resets_pending_confirmation():
     assert guard.blocked(ts=1006.0)
 
 
-def _fake_finished_trip(w, seq: int, mid_at_trip: str = "0.40", eff: str = "0.03") -> None:
+def _fake_finished_trip(w, seq: int, trip_ref: str = "0.40", eff: str = "0.03") -> None:
     """Simulate a guard trip whose cool-off has already ended (2026-07-17, H6:
-    trips are scored for persistence at cool-off end, not at trip time)."""
+    trips are scored for persistence at cool-off end, not at trip time).
+    Round 2: the latched context is the PRE-move reference (trip_ref) —
+    persistence means the mid stayed away from where it was before the move."""
     w.guard.trip_seq = seq
-    w.guard.trip_mid = Decimal(mid_at_trip)
+    w.guard.trip_ref = Decimal(trip_ref)
+    w.guard.trip_mid = Decimal(trip_ref)  # unused by scoring; kept for logging
     w.guard.trip_eff = Decimal(eff)
     w.guard._blocked_until = 0.0
 
@@ -207,7 +210,7 @@ async def test_evicted_with_position_becomes_wind_down(tmp_path):
     w.top = BookTop("MKT", Decimal("0.30"), 10, Decimal("0.34"), 10, 0)  # mid 0.32
     risk.on_mid("MKT", Decimal("0.32"))
     # Confirmed trip (mid 0.30 -> 0.32 persisted past the cool-off) -> evict.
-    _fake_finished_trip(w, 1, mid_at_trip="0.30")
+    _fake_finished_trip(w, 1, trip_ref="0.30")
     await w._requote()
     assert w.evicted and w.reduce_only and not w.reduce_only_origin
     import json

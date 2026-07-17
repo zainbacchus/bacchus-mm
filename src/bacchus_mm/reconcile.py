@@ -51,6 +51,7 @@ log = logging.getLogger(__name__)
 class ReconcileReport:
     vanished: list[tuple[str, str, str]] = field(default_factory=list)  # (ticker, side, order_id)
     orphaned: list[str] = field(default_factory=list)  # canceled order ids
+    ttl_explained: int = 0  # vanished orders old enough that TTL expiry explains them
     sweep: bool = False
 
 
@@ -72,6 +73,8 @@ async def reconcile_pass(
     events: EventLog,
     gate: QuotingGate,
     sweep_cooloff_seconds: float = 900.0,
+    ttl_seconds: float = 900.0,
+    clock_jumped: bool = False,
 ) -> ReconcileReport:
     """One diff + repair cycle. Factored out of the loop for tests; the
     workers dict is read live so bench promotions mid-pass are fine."""
@@ -96,6 +99,8 @@ async def reconcile_pass(
         for ticker in affected:
             fresh[ticker] = {o.order_id for o in await exchange.get_resting_orders(ticker)}
 
+        import time as _time
+
         for oid, (w, attr, o) in vanished_candidates.items():
             if oid in fresh.get(o.ticker, set()):
                 continue  # still resting — the first fetch straddled a replace
@@ -103,13 +108,16 @@ async def reconcile_pass(
                 continue  # the worker already replaced it while we fetched
             setattr(w, attr, None)
             risk.release_order(o.ticker, o.side, o.count)
+            age = _time.monotonic() - o.placed_monotonic if o.placed_monotonic else None
             events.emit(
                 "order_vanished", ticker=o.ticker, side=o.side.value,
-                order_id=oid, price=o.price, count=o.count,
+                order_id=oid, price=o.price, count=o.count, age_seconds=age,
             )
             log.warning("order vanished exchange-side: %s %s %s", o.ticker, o.side.value, oid)
             w.wake()  # re-quote on the next evaluation
             report.vanished.append((o.ticker, o.side.value, oid))
+            if age is not None and age >= 0.8 * ttl_seconds:
+                report.ttl_explained += 1
 
         live_refs = _local_refs(workers)  # re-read: refs may have moved during the awaits
         for oid, o in orphan_candidates.items():
@@ -117,6 +125,19 @@ async def reconcile_pass(
                 continue  # left the book on its own (fill/TTL) — nothing to do
             if oid in live_refs:
                 continue  # a worker claimed it while we were fetching
+            if not (o.client_order_id or "").startswith("bmm-"):
+                # Round 2 (adversarial): flock only guards local processes — an
+                # order the owner placed by hand in the Kalshi UI is NOT ours to
+                # cancel. Log it and leave it alone.
+                events.emit(
+                    "order_foreign", ticker=o.ticker, side=o.side.value,
+                    order_id=oid, price=o.price, count=o.count,
+                )
+                log.warning(
+                    "foreign resting order on %s (%s) — not bot-tagged, leaving it",
+                    o.ticker, oid,
+                )
+                continue
             try:
                 await exchange.cancel_order(oid)
             except Exception as e:  # noqa: BLE001
@@ -139,29 +160,81 @@ async def reconcile_pass(
     # our orders carry cancel_order_on_pause). A single ticker's vanish — its
     # own pause, TTL expiry, or a fill racing the ws callback — is normal
     # churn, never a sweep.
-    quoted = {o.ticker for _, _, o in refs.values()}
+    # Round 2 (adversarial): the strict vanished==quoted set equality both
+    # false-fired (synchronized TTL-refresh bursts; post-sleep wakes where every
+    # order TTL-expired) and was defeated by a single surviving/replaced order.
+    # New trigger: a mass vanish by COUNT (>= max(4, half the refs), across >= 2
+    # tickers), with three vetoes — TTL-age (old orders expiring is not a
+    # sweep), clock jump (first pass after a sleep gap classifies nothing), and
+    # a 2s settle-and-confirm refetch: after a genuine sweep the exchange
+    # rejects re-placements (group tripped / trading paused), so if ANY of our
+    # tagged orders is back on the book, it was ordinary churn — stand down.
     vanished_tickers = {t for t, _, _ in report.vanished}
-    if len(vanished_tickers) >= 2 and vanished_tickers == quoted:
-        pauses = gate.pause_rejections_recent(900)
-        suspected = "maintenance_pause" if pauses else "order_group_trip"
-        events.emit(
-            "exchange_sweep_detected",
-            vanished_tickers=sorted(vanished_tickers),
-            vanished_orders=len(report.vanished),
-            pause_rejections_15m=pauses,
-            suspected=suspected,
-            cooloff_seconds=sweep_cooloff_seconds,
-        )
-        log.error(
-            "EXCHANGE SWEEP (%s suspected): %d orders vanished across %s; cooloff %.0fs",
-            suspected, len(report.vanished), sorted(vanished_tickers), sweep_cooloff_seconds,
-        )
-        gate.engage_cooloff(sweep_cooloff_seconds)
+    swept_count = len(report.vanished) - report.ttl_explained
+    if (
+        not clock_jumped
+        and len(vanished_tickers) >= 2
+        and swept_count >= max(4, (len(refs) + 1) // 2)
+    ):
+        await asyncio.sleep(2)
         try:
-            await exchange.cancel_all_orders()  # cheap no-op safety net
-        except Exception:  # noqa: BLE001
-            log.exception("cancel-all after sweep failed — CHECK THE EXCHANGE UI")
-        report.sweep = True
+            settled = await exchange.get_resting_orders()
+        except Exception:  # noqa: BLE001 — can't confirm -> don't engage
+            settled = None
+        ours_back = (
+            None
+            if settled is None
+            else [o for o in settled if (o.client_order_id or "").startswith("bmm-")]
+        )
+        if ours_back is not None and not ours_back:
+            pauses = gate.pause_rejections_recent(900)
+            suspected = "maintenance_pause" if pauses else "order_group_trip"
+            events.emit(
+                "exchange_sweep_detected",
+                vanished_tickers=sorted(vanished_tickers),
+                vanished_orders=len(report.vanished),
+                ttl_explained=report.ttl_explained,
+                pause_rejections_15m=pauses,
+                suspected=suspected,
+                cooloff_seconds=sweep_cooloff_seconds,
+            )
+            log.error(
+                "EXCHANGE SWEEP (%s suspected): %d orders vanished across %s; cooloff %.0fs",
+                suspected, len(report.vanished), sorted(vanished_tickers),
+                sweep_cooloff_seconds,
+            )
+            gate.engage_cooloff(sweep_cooloff_seconds)
+            try:
+                await exchange.cancel_all_orders()  # cheap no-op safety net
+            except Exception:  # noqa: BLE001
+                log.exception("cancel-all after sweep failed — CHECK THE EXCHANGE UI")
+            report.sweep = True
+
+    # Position-drift adoption (Round 2): fills missed while the ws was down
+    # (or a dropped in-flight message) leave local position wrong until
+    # restart. Compare exchange truth and adopt it, cash-adjusted at the
+    # current mark so the correction itself is PnL-neutral at adoption time.
+    try:
+        ex_positions = await exchange.get_positions()
+    except Exception:  # noqa: BLE001 — next pass retries
+        ex_positions = None
+    if ex_positions is not None:
+        from decimal import Decimal as _D
+
+        for t in set(ex_positions) | set(risk.markets):
+            ex_pos = ex_positions.get(t, 0)
+            st = risk.markets.get(t)
+            local = st.position if st else 0
+            if ex_pos == local:
+                continue
+            events.emit("position_drift", ticker=t, local=local, exchange=ex_pos)
+            log.warning("position drift on %s: local %+d exchange %+d — adopting", t, local, ex_pos)
+            if st is None:
+                risk.seed_position(t, ex_pos, None)
+            else:
+                mark = st.last_mid if st.last_mid is not None else _D("0.5")
+                st.cash -= (ex_pos - local) * mark
+                st.position = ex_pos
 
     # Re-arm pause suspensions: each suspended market gets one fresh placement
     # probe per pass; if it's still paused the rejection simply re-suspends it.
@@ -171,7 +244,7 @@ async def reconcile_pass(
         if w.pause_suspected:
             w.pause_suspected = False
             w.wake()
-            events.emit("quoting_resumed", ticker=w.ticker, reason="reconcile_pass")
+            events.emit("quoting_resumed", ticker=w.ticker, reason="probe_granted")
     return report
 
 
@@ -184,16 +257,30 @@ async def reconcile_loop(
     stop_event: asyncio.Event,
     reconcile_seconds: float,
     sweep_cooloff_seconds: float,
+    ttl_seconds: float = 900.0,
 ) -> None:
     """The global reconcile task. A failed pass (REST hiccup, DB error) logs
-    and retries next cycle instead of killing the loop."""
+    and retries next cycle instead of killing the loop; a hung pass is timed
+    out so the pause re-arm path can never be starved (Round 2)."""
+    import time as _time
+
+    last_pass = _time.monotonic()
     while not stop_event.is_set():
         await asyncio.sleep(reconcile_seconds)
         if stop_event.is_set():
             break
+        now = _time.monotonic()
+        # First pass after a sleep gap: everything expired while we were dark;
+        # classify nothing as a sweep this pass.
+        clock_jumped = now - last_pass > 3 * reconcile_seconds
+        last_pass = now
         try:
-            await reconcile_pass(
-                exchange, workers, risk, events, gate, sweep_cooloff_seconds
+            await asyncio.wait_for(
+                reconcile_pass(
+                    exchange, workers, risk, events, gate, sweep_cooloff_seconds,
+                    ttl_seconds=ttl_seconds, clock_jumped=clock_jumped,
+                ),
+                timeout=max(30.0, reconcile_seconds),
             )
         except asyncio.CancelledError:
             raise

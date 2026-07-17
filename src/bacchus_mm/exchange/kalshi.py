@@ -482,11 +482,14 @@ class KalshiExchange(ExchangeAdapter):
                     backoff = 1.0
                     seqs: dict[int, int] = {}
                     async for raw in ws:
-                        if self._resubscribe:
-                            self._resubscribe = False
-                            log.info("resubscribing websocket with updated market set")
-                            raise _ResubscribeRequested()
+                        # Round 2 (adversarial): process the message we already
+                        # pulled off the socket BEFORE honoring a resubscribe —
+                        # the old order dropped an in-flight fill on the floor.
                         if raw.type != aiohttp.WSMsgType.TEXT:
+                            if self._resubscribe:
+                                self._resubscribe = False
+                                log.info("resubscribing websocket with updated market set")
+                                raise _ResubscribeRequested()
                             continue
                         msg = json.loads(raw.data)
                         mtype = msg.get("type")
@@ -532,6 +535,10 @@ class KalshiExchange(ExchangeAdapter):
                             )
                         elif mtype == "error":
                             log.error("ws error message: %s", msg)
+                        if self._resubscribe:
+                            self._resubscribe = False
+                            log.info("resubscribing websocket with updated market set")
+                            raise _ResubscribeRequested()
                         yield
             except asyncio.CancelledError:
                 raise
@@ -558,4 +565,7 @@ class KalshiApiError(RuntimeError):
 
 
 def new_client_order_id() -> str:
-    return str(uuid.uuid4())
+    # "bmm-" tags our orders so the reconcile loop can distinguish bot orders
+    # from anything the owner places by hand in the Kalshi UI (Round 2: the
+    # orphan-cancel path only ever touches bmm- tagged orders).
+    return f"bmm-{uuid.uuid4()}"

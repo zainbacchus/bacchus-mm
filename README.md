@@ -83,8 +83,10 @@ public. Credentials come only from the environment / `.env` (gitignored).
 
 1. Post-only orders — a quote that would cross is rejected, never a taker fill.
 2. Client-side caps — per-market contracts, per-market notional, gross notional.
-3. Kill switch — drawdown from session high ≥ threshold → cancel all, halt,
-   require explicit `halt-clear` to re-arm.
+3. Kill switch — drawdown from the ACCOUNT-equity high-water mark (chained
+   across sessions) ≥ threshold → cancel all, halt. `halt-clear` re-arms by
+   rebasing the high-water mark to current equity: clearing a halt means
+   "loss acknowledged; protect me from here."
 4. Exchange-side order group — Kalshi cancels everything if the group trades
    more than N contracts in any rolling 15s window.
 5. Order TTLs — resting orders expire server-side even if the bot dies.

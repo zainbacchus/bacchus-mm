@@ -99,7 +99,9 @@ async def test_orphan_order_cancelled_and_event(tmp_path):
     await w._requote()
     # Resting on the exchange but tracked by no worker: worse than nothing —
     # outside caps, the kill switch's worldview, and TTL refresh. Cancel it.
-    ex.resting["ghost"] = Order(order_id="ghost", client_order_id="x", ticker="MKT",
+    # Round 2: only bot-tagged (bmm-) orders are orphan-cancelable — an
+    # untagged order is treated as owner-placed and left alone.
+    ex.resting["ghost"] = Order(order_id="ghost", client_order_id="bmm-x", ticker="MKT",
                                 side=Side.BID, price=Decimal("0.40"), count=3)
     report = await reconcile_pass(ex, workers, risk, events, gate)
     assert report.orphaned == ["ghost"]

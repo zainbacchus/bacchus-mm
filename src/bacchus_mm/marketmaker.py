@@ -54,21 +54,23 @@ class WorkerConfig:
 class FastMoveGuard:
     """Regime-shift circuit breaker. The EWMA sigma reacts over minutes; a
     sudden repricing (data release, news) picks off resting quotes long before
-    sigma widens them. If the mid moves >= threshold within the window, block
-    quoting for a cool-off period — stand aside, don't catch the knife.
+    sigma widens them. Trip -> block quoting for a cool-off period.
 
-    Motivated by the first live fills (2026-07-15): a bid filled at $0.40
-    seconds into a collapse to $0.14 accounted for all realized losses.
-
-    2026-07-17 (H6): de-hair-triggered. The old any-single-step >= 3c rule
-    fired 266 times with 12 evictions in 4 days, mostly false positives: on
-    6-10c-wide books one pulled level moves the mid that much, and the evicted
-    markets were exactly the wide books the spread-weighted selector prefers.
-    Now: effective threshold = max(threshold, spread_multiple x book spread);
-    a 1x-2x move must persist across confirm_updates consecutive same-direction
-    book updates; a >= 2x move is unambiguous and trips immediately. Trip
-    context (trip_seq/trip_mid/trip_eff) lets the worker score at cool-off end
-    whether the move persisted before counting it toward eviction."""
+    2026-07-17 (H6): spread-scaled threshold + persistence confirmation.
+    2026-07-17 review round 2 (adversarial): three defects fixed —
+      - the windowed CUMULATIVE move detects multi-step collapses again (the
+        rewrite only looked at single steps; a collapse that walks down 1-2c
+        at a time — the shape of the motivating 0.40->0.14 incident — never
+        tripped);
+      - the effective threshold scales with the spread that PREVAILED before
+        the move (min over the window, capped at 2x base): a shock blows the
+        spread out at the moment of the move, which raised the bar exactly
+        when it needed to hold; a single step >= 2x the BASE threshold always
+        trips regardless of spread;
+      - trips latch the PRE-move reference (trip_ref): persistence scoring
+        must confirm moves that STICK (|now - ref| stays large) and forgive
+        moves that revert — the previous code stored the post-move mid, which
+        inverted the classification."""
 
     def __init__(
         self,
@@ -84,65 +86,103 @@ class FastMoveGuard:
         self.spread_multiple = spread_multiple
         self.confirm_updates = confirm_updates
         self._hist: deque[tuple[float, Decimal]] = deque()
+        self._spread_hist: deque[tuple[float, Decimal]] = deque()
         self._blocked_until = 0.0
-        # Pending (unconfirmed) move: direction, reference mid, steps seen.
+        # Pending (unconfirmed) move: direction, pre-move reference, steps, opened-at.
         self._pend_dir = 0
         self._pend_ref: Optional[Decimal] = None
         self._pend_steps = 0
+        self._pend_opened = 0.0
         # Last trip's context, consumed by the worker at cool-off end.
         self.trip_seq = 0
-        self.trip_mid: Optional[Decimal] = None
+        self.trip_ref: Optional[Decimal] = None  # PRE-move reference mid
+        self.trip_mid: Optional[Decimal] = None  # mid at trip time
         self.trip_eff: Optional[Decimal] = None
 
-    def _effective_threshold(self, spread: Optional[Decimal]) -> Decimal:
-        if spread is None:
+    def _effective_threshold(self, now: float) -> Decimal:
+        """Scale by the spread that prevailed BEFORE this update (min over the
+        window — a shock's own blown-out spread must not raise the bar), and
+        cap at 2x the base threshold so wide books still have a working guard."""
+        while self._spread_hist and now - self._spread_hist[0][0] > self.window:
+            self._spread_hist.popleft()
+        if not self._spread_hist:
             return self.threshold
-        return max(self.threshold, self.spread_multiple * spread)
+        prevailing = min(sp for _, sp in self._spread_hist)
+        eff = max(self.threshold, self.spread_multiple * prevailing)
+        return min(eff, 2 * self.threshold)
 
-    def _trip(self, now: float, mid: Decimal, eff: Decimal) -> None:
+    def _clear_pending(self) -> None:
+        self._pend_dir, self._pend_ref, self._pend_steps = 0, None, 0
+
+    def _trip(self, now: float, ref: Decimal, mid: Decimal, eff: Decimal) -> None:
+        if now < self._blocked_until:
+            # Already in cool-off: continued movement (or the bounce back)
+            # EXTENDS the block but must not overwrite the original trip
+            # context — re-latching the reference mid-episode corrupts the
+            # persistence scoring at cool-off end (guard_inversion_repro).
+            self._blocked_until = max(self._blocked_until, now + self.cooloff)
+            self._clear_pending()
+            return
         self._blocked_until = now + self.cooloff
         self.trip_seq += 1
+        self.trip_ref = ref
         self.trip_mid = mid
         self.trip_eff = eff
-        self._pend_dir = 0
-        self._pend_ref = None
-        self._pend_steps = 0
+        self._clear_pending()
 
     def update(
         self, mid: Decimal, ts: Optional[float] = None, spread: Optional[Decimal] = None
     ) -> None:
         now = ts if ts is not None else time.monotonic()
-        eff = self._effective_threshold(spread)
+        eff = self._effective_threshold(now)  # before recording this update's spread
+        if spread is not None:
+            self._spread_hist.append((now, spread))
         last_mid = self._hist[-1][1] if self._hist else mid
         step = mid - last_mid
         self._hist.append((now, mid))
         while self._hist and now - self._hist[0][0] > self.window:
             self._hist.popleft()
-        # A single-step gap >= 2x the effective threshold is always a shock,
-        # even if the previous update is older than the window (sparse books
-        # gap between ticks).
-        if abs(step) >= 2 * eff:
-            self._trip(now, mid, eff)
+        window_ref = self._hist[0][1]
+        window_move = mid - window_ref
+
+        # Unambiguous shocks trip immediately: a single step >= 2x eff, a step
+        # >= 2x the BASE threshold (spread scaling must never mute a true gap),
+        # or a windowed cumulative move >= 2x eff (multi-step collapse).
+        if abs(step) >= 2 * eff or abs(step) >= 2 * self.threshold:
+            self._trip(now, last_mid, mid, eff)
             return
-        if abs(step) >= eff:
-            d = 1 if step > 0 else -1
+        if abs(window_move) >= 2 * eff:
+            self._trip(now, window_ref, mid, eff)
+            return
+
+        # A stale candidate whose opening step aged out of the window expires.
+        if self._pend_dir and now - self._pend_opened > self.window:
+            self._clear_pending()
+
+        # 1x-2x moves (single-step or windowed) open/extend a pending candidate
+        # that must persist across confirm_updates same-direction updates.
+        if abs(step) >= eff or abs(window_move) >= eff:
+            move = step if abs(step) >= eff else window_move
+            ref = last_mid if abs(step) >= eff else window_ref
+            d = 1 if move > 0 else -1
             if d == self._pend_dir:
                 self._pend_steps += 1
             else:
-                self._pend_dir, self._pend_ref, self._pend_steps = d, last_mid, 1
+                self._pend_dir, self._pend_ref, self._pend_steps = d, ref, 1
+                self._pend_opened = now
         elif self._pend_dir:
-            s = (step > 0) - (step < 0)
-            if s == self._pend_dir:
+            sgn = (step > 0) - (step < 0)
+            if sgn == self._pend_dir:
                 self._pend_steps += 1  # grind continuing in the shock direction
-            elif s == -self._pend_dir and abs(mid - self._pend_ref) < eff:
-                # Reverted inside the threshold band: false start, forget it.
-                self._pend_dir, self._pend_ref, self._pend_steps = 0, None, 0
+            elif sgn == -self._pend_dir and abs(mid - self._pend_ref) < eff:
+                self._clear_pending()  # reverted inside the band: false start
         if (
             self._pend_dir
             and self._pend_steps >= self.confirm_updates
+            and self._pend_ref is not None
             and abs(mid - self._pend_ref) >= eff
         ):
-            self._trip(now, mid, eff)
+            self._trip(now, self._pend_ref, mid, eff)
 
     def blocked(self, ts: Optional[float] = None) -> bool:
         now = ts if ts is not None else time.monotonic()
@@ -216,7 +256,10 @@ class MarketWorker:
         self.gate = gate or QuotingGate()
         # 2026-07-17 (C1): set on a trading_is_paused rejection; the next
         # reconcile pass clears it and grants one fresh placement probe.
+        # Round 2: _pause_suspected_at backs a 5-min self-clear fallback so a
+        # wedged reconcile loop cannot strand markets suspended forever.
         self.pause_suspected = False
+        self._pause_suspected_at = 0.0
         self.vol = VolEstimator(strategy.sigma_halflife_seconds, strategy.sigma_floor)
         self.guard = FastMoveGuard(
             cfg.fast_move_threshold,
@@ -229,8 +272,10 @@ class MarketWorker:
         self._guard_trips = 0
         # 2026-07-17 (H6): context of the trip whose cool-off is still open;
         # scored for persistence when the cool-off ends (see _resolve_guard_trip).
+        # Round 2: latch the PRE-move reference — persistence means the mid
+        # STAYED away from where it was before the move.
         self._guard_seen_trip = 0
-        self._guard_trip_mid: Optional[Decimal] = None
+        self._guard_trip_ref: Optional[Decimal] = None
         self._guard_trip_eff: Optional[Decimal] = None
         self.evicted = False
         self.top: Optional[BookTop] = None
@@ -252,7 +297,10 @@ class MarketWorker:
             self.risk.on_mid(self.ticker, mid)
             now = time.monotonic()
             if now - self._last_mid_mark >= self.cfg.mid_mark_interval:
-                self.events.record_mid(self.ticker, mid, top.bid, top.ask)
+                try:
+                    self.events.record_mid(self.ticker, mid, top.bid, top.ask)
+                except Exception:  # noqa: BLE001 — a DB hiccup must not starve the wake
+                    log.exception("record_mid failed for %s", self.ticker)
                 self._last_mid_mark = now
         self._dirty.set()
 
@@ -322,15 +370,18 @@ class MarketWorker:
             self._dirty.set()  # re-check when the cooloff ends
             return
         # 2026-07-17 (C1): this market rejected with trading_is_paused; stay
-        # suspended until the next reconcile pass grants a fresh probe.
+        # suspended until the next reconcile pass grants a fresh probe (or the
+        # 5-minute fallback below, if the reconcile loop itself is wedged).
         if self.pause_suspected:
-            return
+            if time.monotonic() - self._pause_suspected_at < 300:
+                return
+            self.pause_suspected = False
 
         # A new guard trip since the last cycle: latch its context. Counting it
         # toward eviction waits for the cool-off to end (H6 persistence check).
         if self.guard.trip_seq != self._guard_seen_trip:
             self._guard_seen_trip = self.guard.trip_seq
-            self._guard_trip_mid = self.guard.trip_mid
+            self._guard_trip_ref = self.guard.trip_ref
             self._guard_trip_eff = self.guard.trip_eff
 
         blocked = self.guard.blocked()
@@ -353,8 +404,19 @@ class MarketWorker:
             # profitable escape), drop only the accumulating side below.
         else:
             self._guard_announced = False
-            if self._guard_trip_mid is not None:
+            if self._guard_trip_ref is not None:
                 self._resolve_guard_trip(top.mid)
+                # Round 2 (adversarial): eviction decided this cycle must not
+                # fall through to placement — the worker used to re-quote the
+                # just-evicted market and leave the orders unmanaged to TTL.
+                if self.evicted and not self.reduce_only:
+                    self.bid_order = await self._reconcile(
+                        Side.BID, self.bid_order, None, 0, cancel_reason="evicted"
+                    )
+                    self.ask_order = await self._reconcile(
+                        Side.ASK, self.ask_order, None, 0, cancel_reason="evicted"
+                    )
+                    return
 
         mid = top.mid
         quotes = compute_quotes(
@@ -405,24 +467,25 @@ class MarketWorker:
     def _resolve_guard_trip(self, mid_now: Decimal) -> None:
         """Score a finished cool-off (2026-07-17, H6): a trip counts toward
         eviction ONLY if the move persisted — at cool-off end the mid must
-        still be >= eff_threshold/2 away from the trip mid. Otherwise it was
-        one pulled level on a wide book: log guard_false_alarm and don't count.
-        (Evidence: 266 trips/12 evictions in 4 days, incl. false positives
-        evicting the wide books the selector prefers; KXRAINNYCM 65+34 pulls.)"""
-        mid_at_trip, eff = self._guard_trip_mid, self._guard_trip_eff
-        self._guard_trip_mid = None
-        confirmed = abs(mid_now - mid_at_trip) >= eff / 2
+        still be >= eff/2 away from the PRE-move reference. A move that stuck
+        is a real repricing (counts); one pulled level that bounced back is a
+        false alarm (logged, not counted). Round 2: scoring vs the pre-move
+        reference — the first version compared against the post-move mid,
+        which inverted the classification."""
+        trip_ref, eff = self._guard_trip_ref, self._guard_trip_eff
+        self._guard_trip_ref = None
+        confirmed = abs(mid_now - trip_ref) >= eff / 2
         if confirmed:
             self._guard_trips += 1
         self.events.emit(
             "guard_trip", ticker=self.ticker, confirmed=confirmed,
-            mid_at_trip=mid_at_trip, mid_now=mid_now, eff_threshold=eff,
+            trip_ref=trip_ref, mid_now=mid_now, eff_threshold=eff,
             trips=self._guard_trips,
         )
         if not confirmed:
             self.events.emit(
                 "guard_false_alarm", ticker=self.ticker,
-                mid_at_trip=mid_at_trip, mid_now=mid_now, eff_threshold=eff,
+                trip_ref=trip_ref, mid_now=mid_now, eff_threshold=eff,
             )
             return
         if self._guard_trips >= self.cfg.guard_evict_trips and not self.evicted:
@@ -525,6 +588,7 @@ class MarketWorker:
                 self.gate.note_pause_rejection()
                 if not self.pause_suspected:
                     self.pause_suspected = True
+                    self._pause_suspected_at = time.monotonic()
                     self.events.emit(
                         "quoting_suspended", ticker=self.ticker,
                         reason="trading_is_paused", until="next_reconcile_pass",

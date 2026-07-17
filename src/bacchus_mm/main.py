@@ -297,13 +297,28 @@ async def cmd_trade(cfg: Config, live: bool, dry_run: bool) -> None:
 
         balance = await ex.get_balance()
         positions = await ex.get_positions()
+
+        def _last_logged_mid(ticker: str):
+            # Round 2 (adversarial): seed held positions at the PRIOR session's
+            # final mark, not the current mid — otherwise every repricing that
+            # happens while the bot is down (nightly sleeps!) silently vanishes
+            # from the cumulative chain and the kill switch never sees it.
+            row = events.db.execute(
+                "SELECT mid FROM mids WHERE ticker=? ORDER BY ts_ms DESC LIMIT 1", (ticker,)
+            ).fetchone()
+            return Decimal(str(row[0])) if row else None
+
         for s in picks:
-            risk.seed_position(s.market.ticker, positions.get(s.market.ticker, 0), s.market.mid)
+            t = s.market.ticker
+            if positions.get(t, 0):
+                risk.seed_position(t, positions[t], _last_logged_mid(t) or s.market.mid)
+            else:
+                risk.seed_position(t, 0, s.market.mid)
         # Orphan positions (held in markets we no longer quote) stay marked so
         # PnL and the kill switch always see the whole book.
         for t, pos in positions.items():
             if t not in tickers:
-                risk.seed_position(t, pos, None)
+                risk.seed_position(t, pos, _last_logged_mid(t))
 
         if not dry_run:
             await ex.ensure_order_group(cfg.order_group_contracts_per_15s)
@@ -436,7 +451,12 @@ async def cmd_trade(cfg: Config, live: bool, dry_run: bool) -> None:
                 # on a new account high-water (a crash must never lose the
                 # kill-switch reference peak), otherwise at most once a minute
                 # as cheap crash insurance for losses and stale values too.
-                if risk.new_high_water_since_load or time.monotonic() - last_kv_persist >= 60:
+                # Round 2: observe runs must never touch the equity chain — a
+                # dry-run session has no fills but WOULD ratchet high_water on
+                # transient marks of held positions.
+                if not dry_run and (
+                    risk.new_high_water_since_load or time.monotonic() - last_kv_persist >= 60
+                ):
                     persist_pnl_marks(events, risk)
                     last_kv_persist = time.monotonic()
                 reason = risk.should_halt()
@@ -465,6 +485,7 @@ async def cmd_trade(cfg: Config, live: bool, dry_run: bool) -> None:
                 reconcile_loop(
                     ex, workers, risk, events, gate, stop_event,
                     cfg.reconcile_seconds, cfg.sweep_cooloff_seconds,
+                    ttl_seconds=cfg.order_ttl_seconds,
                 ),
                 "reconcile",
             )
@@ -504,11 +525,12 @@ async def cmd_trade(cfg: Config, live: bool, dry_run: bool) -> None:
         else:
             events.emit("session_stop", canceled=0, still_resting=0)
         # 2026-07-17 (FIX-PnL): leave the equity chain durable on every exit —
-        # halt, signal, or plain shutdown.
-        try:
-            persist_pnl_marks(events, risk)
-        except Exception:  # noqa: BLE001
-            log.exception("failed to persist cumulative pnl on shutdown")
+        # halt, signal, or plain shutdown. (Round 2: live sessions only.)
+        if not dry_run:
+            try:
+                persist_pnl_marks(events, risk)
+            except Exception:  # noqa: BLE001
+                log.exception("failed to persist cumulative pnl on shutdown")
         events.close()
         await ex.close()
 

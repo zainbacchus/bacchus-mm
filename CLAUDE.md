@@ -127,6 +127,18 @@ Environment quirks:
   ratio; if confirmed trips still evict calm markets, tune
   fast_move_spread_multiple before touching the base threshold.
 
+## Operating notes
+
+- Orders the bot places carry a `bmm-` client-order-id prefix. The reconcile
+  loop cancels untracked `bmm-` orders (bot leaks) but only LOGS untagged ones
+  (`order_foreign`) — manual orders placed in the Kalshi UI are safe, though
+  they live outside the bot's caps and kill-switch view.
+- `halt-clear` rebases the persisted high-water mark to current cumulative
+  PnL (see README). The kill-switch threshold is cumulative-account-level.
+- The cumulative chain seeds held positions at the PRIOR session's last
+  logged mid, so repricing during downtime lands in the chain. Observe
+  (dry-run) sessions never write the chain.
+
 ## Conventions
 
 - Prices: Decimal dollars in [0,1] on the YES side. Positions: signed

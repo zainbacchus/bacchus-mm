@@ -71,14 +71,28 @@ async def run_recorder(
     pm = PolymarketData()
     tokens: dict[str, str] = {}
     try:
+        resolved: list[VenuePair] = []
         for pair in pairs:
-            market = await pm.get_market(pair.polymarket_slug)
-            outcome = pair.polymarket_outcome or market.outcomes[0]
-            tokens[pair.polymarket_slug] = market.token_for(outcome)
+            # Round 2 (adversarial): under fail-stop supervision, an unguarded
+            # resolution failure here (Gamma outage, renamed slug/outcome)
+            # would take down the whole live bot. Skip bad pairs instead.
+            try:
+                market = await pm.get_market(pair.polymarket_slug)
+                outcome = pair.polymarket_outcome or market.outcomes[0]
+                tokens[pair.polymarket_slug] = market.token_for(outcome)
+            except Exception as e:  # noqa: BLE001
+                log.warning("crossvenue pair %s failed to resolve: %r — skipping",
+                            pair.polymarket_slug, e)
+                continue
+            resolved.append(pair)
             log.info(
                 "pair %s <-> %s [%s] (%s)",
                 pair.kalshi_ticker, pair.polymarket_slug, outcome, market.question,
             )
+        pairs = resolved
+        if not pairs:
+            log.warning("crossvenue: no pairs resolved; recorder idle this session")
+            return
         while True:
             for pair in pairs:
                 try:
