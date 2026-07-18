@@ -292,9 +292,11 @@ def test_summary_reports_fees_and_net_expectancy(tmp_path, capsys):
     assert "total fees in window: $0.05" in out
 
 
-def test_analyze_migrates_pre_m7_db(tmp_path, capsys):
-    # `bacchus-mm analyze` opens the DB without an EventLog — it must upgrade
-    # an old fills table in place instead of dying on the missing fee column.
+def test_analyze_reads_pre_m7_db_read_only(tmp_path, capsys):
+    # 2026-07-18 (round 2): `bacchus-mm analyze` opens the live DB READ-ONLY
+    # while the bot writes — it must NOT mutate the file (the old in-place ALTER
+    # contended for the WAL write lock). A pre-M7 fills table (no fee column) is
+    # handled by degrading fee to 0 in the queries, and the DB is left untouched.
     db = sqlite3.connect(tmp_path / "bacchus.db")
     db.execute(
         "CREATE TABLE fills ("
@@ -317,7 +319,8 @@ def test_analyze_migrates_pre_m7_db(tmp_path, capsys):
     run_report(tmp_path, "summary", hours=1)  # must not raise
     out = capsys.readouterr().out
     assert "MKT" in out and "fees" in out
+    # The DB must be UNCHANGED — no fee column added (read-only, no ALTER).
     check = sqlite3.connect(tmp_path / "bacchus.db")
     cols = {r[1] for r in check.execute("PRAGMA table_info(fills)")}
     check.close()
-    assert "fee" in cols
+    assert "fee" not in cols

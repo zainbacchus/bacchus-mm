@@ -475,16 +475,38 @@ async def test_settlement_poll_realizes_and_emits(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_settlement_poll_determined_counts_as_settled(tmp_path):
-    """determined already carries result — the outcome is economically locked
-    (finalized only times the cash movement)."""
+async def test_settlement_poll_realizes_only_at_finalized(tmp_path):
+    """2026-07-18 (round 2): realize ONLY at finalized. `determined` can still be
+    disputed/amended, and on_settlement freezes the outcome permanently — so a
+    determined market is left held+marking until it finalizes."""
     events = EventLog(tmp_path, "t")
     risk = RiskManager(params=RiskParams(), state_dir=tmp_path)
     risk.on_fill("MKT", -5, Decimal("0.40"))  # long NO at 0.60
-    ex = _SettleExchange("determined", "no")
-    assert await settlement_poll(ex, risk, events, {}) == ["MKT"]
+    # determined does NOT realize yet
+    assert await settlement_poll(_SettleExchange("determined", "no"), risk, events, {}) == []
+    assert risk.markets["MKT"].position == -5 and not risk.markets["MKT"].settled
+    # finalized realizes: long NO settles NO -> +$2.00, and a persisted marker.
+    assert await settlement_poll(_SettleExchange("finalized", "no"), risk, events, {}) == ["MKT"]
     assert risk.pnl() == Decimal("2.00")
+    assert "MKT" in events.settled_tickers()
     events.close()
+
+
+@pytest.mark.asyncio
+async def test_settlement_marker_survives_restart_no_double_realize(tmp_path):
+    """The persisted settled marker must stop a restart from re-realizing a
+    position the exchange still reports during the pre-payout window."""
+    events = EventLog(tmp_path, "t")
+    risk = RiskManager(params=RiskParams(), state_dir=tmp_path)
+    risk.on_fill("MKT", -5, Decimal("0.40"))
+    await settlement_poll(_SettleExchange("finalized", "no"), risk, events, {})
+    realized_pnl = risk.pnl()
+    events.close()
+    # Restart: the marker is in kv; startup must skip re-seeding MKT.
+    events2 = EventLog(tmp_path, "t2")
+    assert "MKT" in events2.settled_tickers()
+    events2.close()
+    assert realized_pnl == Decimal("2.00")
 
 
 @pytest.mark.asyncio
@@ -492,7 +514,8 @@ async def test_settlement_poll_ignores_open_and_closed(tmp_path):
     events = EventLog(tmp_path, "t")
     risk = RiskManager(params=RiskParams(), state_dir=tmp_path)
     risk.on_fill("MKT", 5, Decimal("0.40"))
-    for status, result in (("active", ""), ("closed", ""), ("disputed", "")):
+    for status, result in (("active", ""), ("closed", ""), ("determined", "yes"),
+                           ("disputed", ""), ("amended", "")):
         ex = _SettleExchange(status, result)
         assert await settlement_poll(ex, risk, events, {}) == []
     assert risk.markets["MKT"].position == 5  # still held, still marking

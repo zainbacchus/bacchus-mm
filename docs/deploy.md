@@ -216,3 +216,4 @@ credentials and places no orders.
 | `/health` 503, big `last_event_age_s` | event loop wedged | `fly machine restart`, then pull logs |
 | machine restarting in a loop right after a halt | expected: `[[restart]] policy = "always"` + HALTED marker refusing to trade | `halt-clear` and it recovers by itself |
 | deploy fails health gate | bot didn't come up within 120s grace | `fly logs` — usually credentials or a bad config edit |
+| `fly deploy` fails health gate AND a HALTED marker is on the volume | a halted bot `sys.exit`s before `/health` binds, so the new release can't pass its check | `fly ssh console -C "bacchus-mm halt-clear"` on the current machine first, then redeploy (known limitation, round-2 review 2026-07-18) |

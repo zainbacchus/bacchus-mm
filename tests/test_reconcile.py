@@ -344,12 +344,12 @@ async def test_ambiguous_create_adopted_on_next_cycle(tmp_path):
 
 @pytest.mark.asyncio
 async def test_ambiguous_create_confirmed_lost_replaces(tmp_path):
-    """2026-07-17 (M6): the create genuinely never landed — after the adopt
-    delay the worker confirms it by client_order_id and places fresh (exactly
-    one live order, never two)."""
+    """2026-07-17 (M6) + 2026-07-18 (round 2): a create that genuinely never
+    landed is confirmed lost only after create_confirm_lost_lookups CONSECUTIVE
+    empty lookups, then replaced once (never two live orders)."""
     events, risk, gate, ex, workers = _setup(tmp_path)
     w = workers["MKT"]
-    w.cfg = WorkerConfig(create_adopt_delay=0.01)
+    w.cfg = WorkerConfig(create_adopt_delay=0.0, create_confirm_lost_lookups=2)
     real_create = ex.create_order
     calls = 0
 
@@ -364,15 +364,66 @@ async def test_ambiguous_create_confirmed_lost_replaces(tmp_path):
                                  post_only=post_only)
 
     ex.create_order = dead_create
-    await w._requote()  # bid fails ambiguously; ask places normally
-    assert w.bid_order is None
-    assert calls == 2
-    await asyncio.sleep(0.02)
-    await w._requote()  # bid confirmed lost -> one fresh placement; ask kept
-    assert calls == 3
-    assert w.bid_order is not None
+    await w._requote()  # bid fails ambiguously (call 1); ask places (call 2)
+    assert w.bid_order is None and calls == 2
+    await w._requote()  # 1st empty lookup: re-park, NO replace yet
+    assert w.bid_order is None and calls == 2
+    assert not _events_of(events, "order_placement_confirmed_lost")
+    await w._requote()  # 2nd empty lookup: confirmed lost -> one fresh place
+    assert calls == 3 and w.bid_order is not None
     assert len(ex.resting) == 2  # bid + ask, no double-place
     assert _events_of(events, "order_placement_confirmed_lost")
+    events.close()
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_create_lagging_order_adopted_not_double_placed(tmp_path):
+    """2026-07-18 (round 2): the order DID land but the exchange's resting view
+    is briefly stale (eventually consistent). It must be adopted on a later
+    lookup, never double-placed — the core no-double-place guarantee."""
+    events, risk, gate, ex, workers = _setup(tmp_path)
+    w = workers["MKT"]
+    w.cfg = WorkerConfig(create_adopt_delay=0.0, create_confirm_lost_lookups=2)
+    real_create = ex.create_order
+    calls = 0
+    lookups = 0
+    landed_cid = {}
+
+    async def landing_create(ticker, side, price, count, client_order_id,
+                             expiration_seconds=None, post_only=True):
+        nonlocal calls
+        calls += 1
+        if side is Side.BID and calls == 1:
+            # The order LANDS on the exchange, but the create call still raises
+            # ambiguously (timeout after the write reached the book).
+            o = await real_create(ticker, side, price, count, client_order_id,
+                                   expiration_seconds=expiration_seconds, post_only=post_only)
+            landed_cid["oid"] = o.order_id
+            raise TimeoutError("timed out after the write landed")
+        return await real_create(ticker, side, price, count, client_order_id,
+                                 expiration_seconds=expiration_seconds, post_only=post_only)
+
+    real_get = ex.get_resting_orders
+
+    async def lagging_get(ticker=None):
+        # First adopt lookup is stale (order invisible); later lookups see it.
+        nonlocal lookups
+        lookups += 1
+        res = await real_get(ticker)
+        if lookups <= 1:
+            res = [o for o in res if o.order_id != landed_cid.get("oid")]
+        return res
+
+    ex.create_order = landing_create
+    ex.get_resting_orders = lagging_get
+    await w._requote()   # bid create "fails" but landed; ask places
+    await w._requote()   # 1st lookup stale -> re-park, NO replace
+    assert w.bid_order is None
+    await w._requote()   # 2nd lookup sees it -> ADOPT, no new create
+    assert w.bid_order is not None and w.bid_order.order_id == landed_cid["oid"]
+    assert len(ex.resting) == 2  # the landed bid + ask — never double-placed
+    assert _events_of(events, "order_adopted")
+    assert not _events_of(events, "order_placement_confirmed_lost")
     events.close()
 
 

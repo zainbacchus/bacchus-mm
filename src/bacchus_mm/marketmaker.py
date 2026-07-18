@@ -70,6 +70,13 @@ class WorkerConfig:
     # orders by client_order_id: adopt it if found, re-place if confirmed
     # lost. Never blind-retry a create (see kalshi.py create_order).
     create_adopt_delay: float = 2.0
+    # 2026-07-18 (round 2): a single empty adopt-lookup does NOT prove the order
+    # never landed — Kalshi's resting-orders query is eventually consistent, so
+    # a just-landed order can be briefly invisible. Require this many CONSECUTIVE
+    # empty lookups (each after another adopt_delay) before declaring the create
+    # lost and re-placing; otherwise a lagging order + a fresh place = the same
+    # quote on the book twice, both fillable.
+    create_confirm_lost_lookups: int = 3
 
 
 class FastMoveGuard:
@@ -317,10 +324,12 @@ class MarketWorker:
         self._winddown_distressed = False
         self._winddown_adverse = Decimal(0)
         self._last_distress_emit: Optional[float] = None
-        # 2026-07-17 (M6): side -> (client_order_id, failure monotonic) for a
-        # create whose outcome is unknown (timeout/5xx). Reconciled by
-        # client_order_id before that side re-places.
-        self._pending_create: dict[Side, tuple[str, float]] = {}
+        # 2026-07-17 (M6): side -> (client_order_id, last-lookup monotonic,
+        # consecutive empty lookups) for a create whose outcome is unknown
+        # (timeout/5xx). Reconciled by client_order_id before that side
+        # re-places; only declared lost after create_confirm_lost_lookups
+        # consecutive empty lookups (2026-07-18, round 2).
+        self._pending_create: dict[Side, tuple[str, float, int]] = {}
 
     # Called from the websocket consumer (same event loop).
     def on_book_top(self, top: BookTop) -> None:
@@ -681,18 +690,27 @@ class MarketWorker:
         # place fresh only when confirmed lost.
         pend = self._pending_create.get(side)
         if pend is not None:
-            cid, failed_at = pend
-            if time.monotonic() - failed_at < self.cfg.create_adopt_delay:
+            cid, last_at, empties = pend
+            if time.monotonic() - last_at < self.cfg.create_adopt_delay:
                 return existing  # ambiguity window: neither place nor churn
             del self._pending_create[side]
             adopted = await self._adopt_if_resting(side, cid)
             if adopted is not None:
                 return adopted
             if side in self._pending_create:
-                return existing  # lookup failed and re-parked; retry next cycle
+                return existing  # lookup itself failed and re-parked; retry next cycle
+            # 2026-07-18 (round 2): an empty lookup is not proof of loss — the
+            # exchange's resting view is eventually consistent. Require several
+            # consecutive empties (each after another adopt_delay) before
+            # re-placing, so a just-landed order gets adopted rather than
+            # double-placed.
+            empties += 1
+            if empties < self.cfg.create_confirm_lost_lookups:
+                self._pending_create[side] = (cid, time.monotonic(), empties)
+                return existing
             self.events.emit(
                 "order_placement_confirmed_lost", ticker=self.ticker,
-                side=side.value, client_order_id=cid,
+                side=side.value, client_order_id=cid, lookups=empties,
             )
         # Refresh before the exchange-side TTL kills the order: past ~80% of its
         # life we re-place even at an unchanged price, otherwise a quiet market
@@ -794,7 +812,7 @@ class MarketWorker:
                     price=price, size=size, error=str(e),
                 )
                 return None
-            self._pending_create[side] = (cid, time.monotonic())
+            self._pending_create[side] = (cid, time.monotonic(), 0)
             self.events.emit(
                 "order_placement_unknown", ticker=self.ticker, side=side.value,
                 client_order_id=cid, price=price, size=size, error=str(e),
@@ -805,6 +823,12 @@ class MarketWorker:
             )
             return None
 
+    def parked_client_order_ids(self) -> set[str]:
+        """client_order_ids of ambiguous creates awaiting adopt/confirm-lost
+        (2026-07-18, round 2). The reconcile loop must NOT orphan-cancel these:
+        the order may be live exchange-side and is about to be adopted."""
+        return {cid for (cid, _at, _n) in self._pending_create.values()}
+
     async def _adopt_if_resting(self, side: Side, client_order_id: str) -> Optional[Order]:
         """Look up an ambiguously-placed order by client_order_id (2026-07-17,
         M6). If it is resting exchange-side, adopt it: register the C3
@@ -813,8 +837,10 @@ class MarketWorker:
             resting = await self.exchange.get_resting_orders(self.ticker)
         except Exception as e:  # noqa: BLE001
             # Lookup failed: stay parked — better a missed cycle than a
-            # double-place. The next _reconcile retries the lookup.
-            self._pending_create[side] = (client_order_id, time.monotonic())
+            # double-place. A failed lookup is not an empty one, so it does not
+            # count toward the confirm-lost tally (reset to 0). The next
+            # _reconcile retries the lookup.
+            self._pending_create[side] = (client_order_id, time.monotonic(), 0)
             self.events.emit(
                 "error", ticker=self.ticker, where="adopt_lookup",
                 side=side.value, error=str(e),

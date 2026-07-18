@@ -53,5 +53,12 @@ def compute_fee(
         raw = rate * count * price * (Decimal(1) - price)
         # Kalshi rounds each trade's fee UP to the next cent — small taker
         # fills pay a minimum of $0.01, which net-of-fee markouts must see.
+        # NOTE (round 2, 2026-07-18): the exchange rounds once per ORDER; when
+        # one order fills as N partials this per-fill ceiling slightly OVERstates
+        # the fee (each partial hits its own $0.01 minimum). This is only the
+        # fallback path (the reported fee_cost is preferred) and it errs
+        # conservative — overstated fees understate PnL, tripping the kill
+        # switch early rather than late. Aggregate per order_id here if the
+        # partial-fill error ever grows material.
         return raw.quantize(CENT, rounding=ROUND_CEILING)
     raise ValueError(f"unknown fee formula {schedule.formula!r}")

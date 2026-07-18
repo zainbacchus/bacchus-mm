@@ -617,6 +617,22 @@ class KalshiExchange(ExchangeAdapter):
                             # which number it's holding.
                             reported = _dec(m.get("fee_cost"))
                             if reported is not None:
+                                # 2026-07-18 (round 2) guardrail: fee_cost is
+                                # documented in fixed-point DOLLARS. A taker fee
+                                # can never exceed count*price (the whole cost),
+                                # so a value above that means the field changed
+                                # units (e.g. integer cents) — refuse it and
+                                # fall through to the formula rather than
+                                # 100x-booking a fee into the kill switch.
+                                fee_cap = count * (yp or Decimal(1))
+                                if fee_cap > 0 and reported > fee_cap:
+                                    log.error(
+                                        "fee_cost %s implausible vs cap %s on %s — "
+                                        "using formula (check API units)",
+                                        reported, fee_cap, m.get("market_ticker"),
+                                    )
+                                    reported = None
+                            if reported is not None:
                                 fee, fee_source = reported, "reported"
                             elif self.fee_schedule is not None:
                                 fee = compute_fee(

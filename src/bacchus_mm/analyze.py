@@ -24,14 +24,21 @@ def _connect(data_dir: Path) -> sqlite3.Connection:
     db_path = Path(data_dir) / "bacchus.db"
     if not db_path.exists():
         raise SystemExit(f"no log database at {db_path} — run the bot first")
-    conn = sqlite3.connect(db_path)
-    # 2026-07-17 (M7): analyze reads fills.fee; upgrade pre-M7 DBs in place
-    # instead of crashing on the missing column.
-    from .eventlog import ensure_schema_upgrades
-
-    ensure_schema_upgrades(conn)
+    # 2026-07-18 (round 2): open READ-ONLY. analyze runs against the live DB
+    # while the bot writes; the previous code opened read-write and ran an
+    # ALTER TABLE, which contends for the single WAL write lock and can raise
+    # 'database is locked'. A pre-M7 DB (no fee column) is handled by fee_col()
+    # degrading to 0, not by mutating the file.
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def fee_col(conn: sqlite3.Connection) -> str:
+    """`fee` if the column exists (M7+ DB), else the literal `0` — lets analyze
+    read a pre-M7 DB read-only without an in-place migration (2026-07-18)."""
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(fills)")}
+    return "fee" if "fee" in cols else "0"
 
 
 def _since_ms(hours: float) -> int:
@@ -59,12 +66,12 @@ def report_summary(conn: sqlite3.Connection, hours: float) -> None:
     print(f"gross position: {last_row['gross_contracts']} contracts")
     print()
     rows = conn.execute(
-        """SELECT ticker,
+        f"""SELECT ticker,
                   COUNT(*) fills,
                   SUM(ABS(signed_count)) contracts,
                   SUM(CASE WHEN is_taker THEN 1 ELSE 0 END) taker_fills,
                   SUM(signed_count) net_position_delta,
-                  SUM(fee) fees,
+                  SUM({fee_col(conn)}) fees,
                   AVG(CASE WHEN mid_at_fill IS NOT NULL
                        THEN (mid_at_fill - yes_price) * SIGN(signed_count) END) avg_edge_at_fill
            FROM fills WHERE ts_ms >= ? GROUP BY ticker ORDER BY contracts DESC""",
@@ -100,7 +107,8 @@ def report_summary(conn: sqlite3.Connection, hours: float) -> None:
 def report_markouts(conn: sqlite3.Connection, hours: float) -> None:
     since = _since_ms(hours)
     fills = conn.execute(
-        "SELECT ts_ms, ticker, signed_count, yes_price, fee FROM fills WHERE ts_ms >= ?",
+        f"SELECT ts_ms, ticker, signed_count, yes_price, {fee_col(conn)} AS fee "
+        "FROM fills WHERE ts_ms >= ?",
         (since,),
     ).fetchall()
     if not fills:

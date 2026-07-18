@@ -16,11 +16,21 @@ Tables:
 memory and flushed in ONE transaction every flush_seconds or every
 flush_batch rows, whichever first — the old commit+fsync per row produced
 145k rows / 62MB in 4 days at 8 markets and would stall the loop at 15-20.
-synchronous=NORMAL is safe under WAL (crash loses at most the last flush,
-which the JSONL mirror still holds). Everything stays on the caller's thread
-(the single asyncio loop); there are no writer threads. Money-side tables
-(fills, pnl_marks, venue_marks, kv) keep synchronous commits: they are rare,
-and the fill-dedup seed / kill-switch chain must never read stale state.
+Everything stays on the caller's thread (the single asyncio loop); there are
+no writer threads. Money-side tables (fills, pnl_marks, venue_marks, kv)
+commit immediately: they are rare, and the fill-dedup seed / kill-switch
+chain must always read committed (not queued) state.
+
+Durability precisely (2026-07-18, round 2 correction): journal_mode=WAL +
+synchronous=NORMAL means a committed transaction survives a PROCESS crash
+(it's in the WAL) but is fsync'd only at checkpoint, so an OS crash / power
+loss can roll back the last un-checkpointed commits — this applies to the
+money-side tables too, not just the batched ones. The events firehose is
+additionally mirrored to JSONL immediately on emit(), so queued-but-unflushed
+EVENTS survive even a process crash; MIDS are NOT JSONL-mirrored, so the last
+~flush_seconds of queued mids are lost on a process crash (acceptable: mids
+are a dense marking series, and the equity chain re-seeds held positions from
+the last COMMITTED mid, tolerating a small gap).
 """
 
 from __future__ import annotations
@@ -44,6 +54,9 @@ CREATE TABLE IF NOT EXISTS events (
     payload TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_events_type_ts ON events(type, ts_ms);
+-- 2026-07-18 (round 2): the retention prune filters on ts_ms alone; without a
+-- ts_ms-leading index the DELETE was a full-table SCAN (~163ms on the loop).
+CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts_ms);
 CREATE TABLE IF NOT EXISTS fills (
     ts_ms INTEGER NOT NULL,
     session_id TEXT NOT NULL,
@@ -196,16 +209,30 @@ class EventLog:
         """2026-07-17 (M1): prune ONLY the events firehose; the JSONL files
         are the archive and fills/mids/pnl_marks/venue_marks/kv are kept
         forever (money state and markout history). events_keep_days <= 0
-        disables pruning."""
+        disables pruning.
+
+        2026-07-18 (round 2): deleted in bounded chunks so the DELETE can never
+        block the trading loop for more than one small batch. The idx_events_ts
+        index turns each chunk into a range scan; a control yield between chunks
+        lets the loop breathe. Safe to run on the loop at this granularity."""
         if self._events_keep_days <= 0:
             return 0
         now = now_ms if now_ms is not None else int(time.time() * 1000)
         cutoff = now - self._events_keep_days * 86_400_000
-        cur = self.db.execute("DELETE FROM events WHERE ts_ms < ?", (cutoff,))
-        self.db.commit()
+        total = 0
+        while True:
+            cur = self.db.execute(
+                "DELETE FROM events WHERE rowid IN "
+                "(SELECT rowid FROM events WHERE ts_ms < ? LIMIT 2000)",
+                (cutoff,),
+            )
+            self.db.commit()
+            total += cur.rowcount
+            if cur.rowcount < 2000:
+                break
         self._last_prune_day = time.strftime("%Y%m%d")
-        self.emit("events_pruned", deleted=cur.rowcount, keep_days=self._events_keep_days)
-        return cur.rowcount
+        self.emit("events_pruned", deleted=total, keep_days=self._events_keep_days)
+        return total
 
     def _maybe_prune_daily(self) -> None:
         day = time.strftime("%Y%m%d")  # wall clock: retention is calendar-based
@@ -259,9 +286,11 @@ class EventLog:
         fee: Optional[Decimal] = None,
         fee_source: str = "none",
     ) -> None:
-        """Synchronous commit on purpose (2026-07-17, M1): fills are rare and
-        the next session's fill-dedup set is seeded from this table — a fill
-        lost to an unflushed queue could double-count on ws redelivery."""
+        """Commits immediately, not via the batched queue (2026-07-17, M1):
+        fills are rare and the next session's fill-dedup set is seeded from
+        this table — a fill left in an unflushed queue could double-count on
+        ws redelivery. (Durability is process-crash-safe under WAL, not
+        power-loss-safe under synchronous=NORMAL — see the module docstring.)"""
         ts = ts_ms or int(time.time() * 1000)
         fee_d = fee if fee is not None else Decimal(0)
         self.db.execute(
@@ -361,9 +390,11 @@ class EventLog:
         return row[0] if row else None
 
     def kv_set(self, key: str, value: str) -> None:
-        """Synchronous on purpose (2026-07-17, M1): one rare row carrying the
-        kill-switch equity chain — it must be durable the moment it returns,
-        not at the next flush."""
+        """Commits immediately, not via the batched queue (2026-07-17, M1):
+        one rare row carrying the kill-switch equity chain — it must be
+        committed (readable across a restart) the moment it returns, not at
+        the next flush. (Power-loss durability is bounded by synchronous=NORMAL
+        like every table on this connection — see the module docstring.)"""
         self.db.execute(
             "INSERT INTO kv (key, value) VALUES (?, ?) "
             "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -380,16 +411,33 @@ class EventLog:
         ).fetchall()
         return {r[0] for r in rows if r[0]}
 
+    def mark_settled(self, ticker: str, settlement: str) -> None:
+        """Persist that a market was realized (2026-07-18, round 2): survives a
+        restart so a position still reported by the exchange during the
+        determined->finalized->payout window is never realized twice into the
+        cumulative kill-switch chain. Kalshi tickers are event-unique, so a
+        settled marker can never suppress a genuinely new position."""
+        self.kv_set(f"settled:{ticker}", settlement)
+
+    def settled_tickers(self) -> set[str]:
+        rows = self.db.execute(
+            "SELECT key FROM kv WHERE key LIKE 'settled:%'"
+        ).fetchall()
+        return {r[0].split(":", 1)[1] for r in rows}
+
     def close(self) -> None:
         # 2026-07-17 (M1): drain the queue before closing — normal shutdown,
         # halt, and exception paths in main.py all funnel through here. A
-        # failed final flush must not crash teardown; JSONL still holds it.
+        # failed final flush must not crash teardown; queued EVENTS still live
+        # in JSONL (mids do not — see the module docstring).
         try:
             self.flush()
         except Exception:  # noqa: BLE001
             log.exception(
-                "final eventlog flush failed — %d queued rows live only in JSONL",
-                len(self._pending_events) + len(self._pending_mids),
+                "final eventlog flush failed — %d queued events recoverable from JSONL, "
+                "%d queued mids lost",
+                len(self._pending_events),
+                len(self._pending_mids),
             )
         if self._jsonl:
             self._jsonl.close()

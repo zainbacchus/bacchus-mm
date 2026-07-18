@@ -248,6 +248,11 @@ def reap_closing_markets(
             close_dt = datetime.fromisoformat(close_iso.replace("Z", "+00:00"))
         except ValueError:
             continue
+        # 2026-07-18 (round 2): a naive close_time parses fine but subtracting
+        # from tz-aware `now` raises TypeError (not ValueError), which would
+        # abort the whole reaper tick at the first offender. Coerce to UTC.
+        if close_dt.tzinfo is None:
+            close_dt = close_dt.replace(tzinfo=timezone.utc)
         hours = (close_dt - now).total_seconds() / 3600
         if hours >= reaper_hours:
             continue
@@ -274,15 +279,22 @@ async def settlement_poll(
     risk: RiskManager,
     events: EventLog,
     close_times: dict[str, str],
+    workers: Optional[dict[str, MarketWorker]] = None,
 ) -> list[str]:
     """Settlement realization (2026-07-17, M3): one pass over tickers with
     open positions. Kalshi's lifecycle is open -> closed -> determined ->
-    finalized; `result` (yes/no) is populated at determination, and the
-    outcome is economically locked then, so both determined and finalized
-    realize. Payout is $1 per YES on a yes result, $0 on no — realized into
-    risk as position x (settlement - basis), net-of-fee (no settlement fee;
-    fees were booked at fill time). Emits settlement_realized per market and
-    backfills close_times so the reaper learns orphan tickers' closes."""
+    (disputed -> amended)? -> finalized. Payout is $1 per YES on a yes result,
+    $0 on no — realized into risk as position x (settlement - basis),
+    net-of-fee (no settlement fee; fees were booked at fill time).
+
+    2026-07-18 (round 2): realize ONLY at `finalized`. `determined` can still be
+    disputed/amended, and realizing there locks in a possibly-wrong outcome that
+    on_settlement freezes permanently (settled=True). The position stays visible
+    and marked-to-mid (which tracks ~settlement post-determination anyway) until
+    finalized. On realize we persist a settled marker (survives restart, so the
+    still-reported position can't be double-realized) and retire the worker so a
+    settled market stops quoting even if it determined before the close reaper's
+    window. Emits settlement_realized and backfills close_times for the reaper."""
     realized: list[str] = []
     for t, st in list(risk.markets.items()):
         if st.position == 0 or st.settled:
@@ -292,9 +304,10 @@ async def settlement_poll(
             continue
         if m.close_time:
             close_times.setdefault(t, m.close_time)
-        if m.status in ("determined", "finalized") and m.result in ("yes", "no"):
+        if m.status == "finalized" and m.result in ("yes", "no"):
             settle = Decimal(1) if m.result == "yes" else Decimal(0)
             q, basis, pnl = risk.on_settlement(t, settle)
+            events.mark_settled(t, str(settle))
             events.emit(
                 "settlement_realized", ticker=t, position=q, basis=basis,
                 settlement=settle, pnl=pnl, status=m.status,
@@ -303,6 +316,14 @@ async def settlement_poll(
                 "SETTLED %s: %+d @ basis %s -> %s, realized $%.2f",
                 t, q, basis, m.result, pnl,
             )
+            # Retire the worker: position is 0 now, so evicted drops it from
+            # active_tickers() and stops re-quoting a dead market even if it
+            # resolved before the reaper's 12h window.
+            w = workers.get(t) if workers else None
+            if w is not None:
+                w.close_reaped = True
+                w.evicted = True
+                w.wake()
             realized.append(t)
     return realized
 
@@ -508,8 +529,18 @@ async def cmd_trade(cfg: Config, live: bool, dry_run: bool) -> None:
             ).fetchone()
             return Decimal(str(row[0])) if row else None
 
+        # 2026-07-18 (round 2): a position we already realized in a prior
+        # session is still reported by the exchange until payout clears. Do NOT
+        # re-seed it — its PnL is already baked into the persisted equity chain,
+        # and re-seeding + a re-realize would double-count into the kill switch.
+        already_settled = events.settled_tickers()
+        if already_settled:
+            log.info("skipping %d already-settled tickers at seed: %s",
+                     len(already_settled), ", ".join(sorted(already_settled)))
         for s in picks:
             t = s.market.ticker
+            if t in already_settled:
+                continue
             if positions.get(t, 0):
                 risk.seed_position(t, positions[t], _last_logged_mid(t) or s.market.mid)
             else:
@@ -517,7 +548,7 @@ async def cmd_trade(cfg: Config, live: bool, dry_run: bool) -> None:
         # Orphan positions (held in markets we no longer quote) stay marked so
         # PnL and the kill switch always see the whole book.
         for t, pos in positions.items():
-            if t not in tickers:
+            if t not in tickers and t not in already_settled:
                 risk.seed_position(t, pos, _last_logged_mid(t))
 
         if not dry_run:
@@ -722,7 +753,7 @@ async def cmd_trade(cfg: Config, live: bool, dry_run: bool) -> None:
             while not stop_event.is_set():
                 await asyncio.sleep(cfg.settlement_poll_seconds)
                 try:
-                    await settlement_poll(ex, risk, events, close_times)
+                    await settlement_poll(ex, risk, events, close_times, workers)
                 except Exception:  # noqa: BLE001
                     log.exception("settlement poll failed")
 
@@ -731,7 +762,12 @@ async def cmd_trade(cfg: Config, live: bool, dry_run: bool) -> None:
         _spawn(bench_loop(), "bench_loop")
         _spawn(eventlog_flush_loop(), "eventlog_flush")
         _spawn(marks_loop(), "marks_loop")  # 2026-07-17 (M3)
-        _spawn(settlement_poll_loop(), "settlement_poll")  # 2026-07-17 (M3)
+        # 2026-07-18 (round 2): settlement realization MUTATES risk cash/PnL, so
+        # it is live-only — the same gate reconcile uses. In observe it would
+        # book phantom money into a dry-run session's PnL. marks_loop stays
+        # unconditional (pure logging + reaper quote-pulls, no cash mutation).
+        if not dry_run:
+            _spawn(settlement_poll_loop(), "settlement_poll")  # 2026-07-17 (M3)
         for t in list(workers):
             _spawn(workers[t].run(), f"worker:{t}")
         # 2026-07-17 (C1): one global resting-order reconcile task — see
@@ -774,15 +810,24 @@ async def cmd_trade(cfg: Config, live: bool, dry_run: bool) -> None:
                 # 2026-07-17 (H2): shutdown cancel scoped to our tickers —
                 # worker.stop() already canceled tracked refs; this catches
                 # stragglers on tickers we manage, not the whole account.
-                remaining = await ex.cancel_all_orders(
-                    tickers=managed_tickers(workers, risk)
-                )
-                resting = await ex.get_resting_orders()
+                managed = managed_tickers(workers, risk)
+                remaining = await ex.cancel_all_orders(tickers=managed)
+                # 2026-07-18 (round 2): the "still resting" check is scoped to
+                # OUR tickers too — an account-wide read counts a second
+                # strategy's legitimate orders (the whole point of H2) and
+                # false-fires this alarm while masking a genuine straggler.
+                managed_set = set(managed)
+                resting = [
+                    o for o in await ex.get_resting_orders() if o.ticker in managed_set
+                ]
                 events.emit("session_stop", canceled=remaining, still_resting=len(resting))
                 if resting:
-                    log.error("%d orders STILL RESTING after shutdown — check the exchange UI", len(resting))
+                    log.error(
+                        "%d orders STILL RESTING on managed tickers after shutdown "
+                        "— check the exchange UI", len(resting)
+                    )
                 else:
-                    log.info("shutdown clean: no resting orders")
+                    log.info("shutdown clean: no resting orders on managed tickers")
             except Exception:  # noqa: BLE001
                 log.exception("shutdown cancel-all failed — CHECK THE EXCHANGE UI")
         else:

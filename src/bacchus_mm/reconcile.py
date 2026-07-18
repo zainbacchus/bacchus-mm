@@ -142,11 +142,20 @@ async def reconcile_pass(
                 report.ttl_explained += 1
 
         live_refs = _local_refs(workers)  # re-read: refs may have moved during the awaits
+        # 2026-07-18 (round 2): client_order_ids of ambiguous M6 creates awaiting
+        # adopt/confirm-lost. These orders may be live exchange-side and are
+        # about to be adopted by their worker — cancelling them here would
+        # defeat M6's no-double-place guarantee and leave the side unquoted.
+        parked_cids: set[str] = set()
+        for w in workers.values():
+            parked_cids |= w.parked_client_order_ids()
         for oid, o in orphan_candidates.items():
             if oid not in fresh.get(o.ticker, set()):
                 continue  # left the book on its own (fill/TTL) — nothing to do
             if oid in live_refs:
                 continue  # a worker claimed it while we were fetching
+            if (o.client_order_id or "") in parked_cids:
+                continue  # a worker's ambiguous create is reconciling this one
             if not (o.client_order_id or "").startswith("bmm-"):
                 # Round 2 (adversarial): flock only guards local processes — an
                 # order the owner placed by hand in the Kalshi UI is NOT ours to
@@ -175,6 +184,12 @@ async def reconcile_pass(
             )
             log.error("canceled orphaned resting order %s (%s %s)", oid, o.ticker, o.side.value)
             report.orphaned.append(oid)
+            # 2026-07-18 (round 2): wake the owning-ticker worker so it re-quotes
+            # the now-empty side promptly instead of waiting for its 60s fallback
+            # tick (the orphan path used to only wake on the vanished path).
+            w = workers.get(o.ticker)
+            if w is not None:
+                w.wake()
 
     # Sweep signature: orders vanished across ALL quoted tickers (>= 2) in one
     # pass, none explained by local cancels — exactly the order-group-trip and
