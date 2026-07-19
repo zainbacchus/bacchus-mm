@@ -47,6 +47,28 @@ from .risk import RiskManager
 log = logging.getLogger(__name__)
 
 
+def managed_tickers(
+    workers: dict[str, MarketWorker] | None = None,
+    risk: RiskManager | None = None,
+    selected: list[str] | tuple[str, ...] = (),
+) -> list[str]:
+    """Every ticker WE manage (2026-07-17, H2): all worker tickers (including
+    evicted ones — their orders may still rest until TTL) plus anything we
+    hold a position in, plus an optional explicit selection. Account-wide
+    cancels (startup sweep, kill switch, shutdown, sweep safety net) scope to
+    this set so a second strategy on the same account is left alone. The
+    single-writer flock assumption still stands for UNKNOWN orders: an order
+    we don't track on one of our tickers is still orphan-canceled by the
+    reconcile pass. Empty set cancels NOTHING (fail-safe direction)."""
+    out = set(selected)
+    for t in (workers or {}):
+        out.add(t)
+    for t, st in (risk.markets if risk else {}).items():
+        if st.position:
+            out.add(t)
+    return sorted(out)
+
+
 @dataclass
 class ReconcileReport:
     vanished: list[tuple[str, str, str]] = field(default_factory=list)  # (ticker, side, order_id)
@@ -120,11 +142,20 @@ async def reconcile_pass(
                 report.ttl_explained += 1
 
         live_refs = _local_refs(workers)  # re-read: refs may have moved during the awaits
+        # 2026-07-18 (round 2): client_order_ids of ambiguous M6 creates awaiting
+        # adopt/confirm-lost. These orders may be live exchange-side and are
+        # about to be adopted by their worker — cancelling them here would
+        # defeat M6's no-double-place guarantee and leave the side unquoted.
+        parked_cids: set[str] = set()
+        for w in workers.values():
+            parked_cids |= w.parked_client_order_ids()
         for oid, o in orphan_candidates.items():
             if oid not in fresh.get(o.ticker, set()):
                 continue  # left the book on its own (fill/TTL) — nothing to do
             if oid in live_refs:
                 continue  # a worker claimed it while we were fetching
+            if (o.client_order_id or "") in parked_cids:
+                continue  # a worker's ambiguous create is reconciling this one
             if not (o.client_order_id or "").startswith("bmm-"):
                 # Round 2 (adversarial): flock only guards local processes — an
                 # order the owner placed by hand in the Kalshi UI is NOT ours to
@@ -153,6 +184,12 @@ async def reconcile_pass(
             )
             log.error("canceled orphaned resting order %s (%s %s)", oid, o.ticker, o.side.value)
             report.orphaned.append(oid)
+            # 2026-07-18 (round 2): wake the owning-ticker worker so it re-quotes
+            # the now-empty side promptly instead of waiting for its 60s fallback
+            # tick (the orphan path used to only wake on the vanished path).
+            w = workers.get(o.ticker)
+            if w is not None:
+                w.wake()
 
     # Sweep signature: orders vanished across ALL quoted tickers (>= 2) in one
     # pass, none explained by local cancels — exactly the order-group-trip and
@@ -205,7 +242,10 @@ async def reconcile_pass(
             )
             gate.engage_cooloff(sweep_cooloff_seconds)
             try:
-                await exchange.cancel_all_orders()  # cheap no-op safety net
+                # 2026-07-17 (H2): scope the safety net to tickers we manage —
+                # account-wide cancels block sharing the account with a second
+                # strategy. Everything the sweep just vanished is in this set.
+                await exchange.cancel_all_orders(tickers=managed_tickers(workers, risk))
             except Exception:  # noqa: BLE001
                 log.exception("cancel-all after sweep failed — CHECK THE EXCHANGE UI")
             report.sweep = True

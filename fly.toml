@@ -1,0 +1,63 @@
+# 2026-07-17 (DEPLOY): fly.io v2 config — runs the bot 24/7. Runbook: docs/deploy.md.
+# Schema verified against https://fly.io/docs/reference/configuration/ (2026-07-17).
+
+# App names are globally unique across fly.io — if "bacchus-mm" is taken,
+# `fly apps create` will say so; pick another and change it here too.
+app = "bacchus-mm"
+
+# Kalshi's API fronts AWS CloudFront (anycast); the origin is US-East, so iad
+# (Ashburn) is the lowest-latency fly region. Change with `fly regions` list.
+# IMPORTANT: the volume in [[mounts]] must be created in THIS region.
+primary_region = "iad"
+
+# Fly sends kill_signal then waits kill_timeout before SIGKILL. The bot handles
+# SIGINT/SIGTERM with a full clean shutdown (cancel resting orders, flush the
+# eventlog) — that needs much longer than the 5s default.
+kill_signal = "SIGINT"
+kill_timeout = 60
+
+[processes]
+  # The container CMD. Demo by default. For prod this becomes
+  # "bacchus-mm run --live" — one half of the two-key gate (the other half is
+  # the BACCHUS_LIVE_ENABLED=1 secret). See docs/deploy.md "Going live".
+  app = "bacchus-mm run"
+
+[env]
+  KALSHI_ENV = "demo"     # flip to "prod" only when going live (docs/deploy.md)
+  HEALTH_PORT = "8080"    # force-enables the bot's /health endpoint (config.py)
+
+# Worker, not a web app: deliberately NO [http_service] / [[services]] block,
+# so the app gets no public Anycast IP at all. /health on 8080 is reachable
+# only inside fly's private network, which is all the top-level check below
+# (and `fly ssh console -C "curl localhost:8080/health"`) needs.
+[checks]
+  # Verified schema: https://fly.io/docs/reference/configuration/#the-checks-section
+  # — top-level checks monitor/gate deploys; they don't route traffic (there
+  # is none) and don't restart Machines (that's [[restart]] below).
+  [checks.health]
+    type = "http"
+    port = 8080
+    method = "get"
+    path = "/health"
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "120s"   # startup scans/screens markets before quoting
+
+# Process exits (crash, or supervise() fail-stop on a dead task) -> fly
+# restarts it, forever. A kill-switch halt also exits the process; the HALTED
+# marker on the volume makes each restart refuse to trade until
+# `bacchus-mm halt-clear`, after which the next auto-restart resumes on its own.
+# https://fly.io/docs/machines/guides-examples/machine-restart-policy/
+[[restart]]
+  policy = "always"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"   # measured footprint is small (~100MB); bump to 512mb if OOM
+
+# SQLite (bacchus.db) + JSONL logs live here and survive redeploys/crashes.
+# Create once, SAME REGION as primary_region:
+#   fly volumes create bacchus_data --region iad --size 1
+[[mounts]]
+  source = "bacchus_data"
+  destination = "/app/data"

@@ -68,6 +68,11 @@ class Fill:
     yes_price: Decimal
     is_taker: bool
     ts_ms: int
+    # 2026-07-17 (M7): exchange fee in dollars for this fill. fee_source:
+    # "reported" = the venue told us (Kalshi ws fee_cost), "computed" = local
+    # formula estimate, "none" = no schedule configured. Money math Decimal.
+    fee: Decimal = Decimal("0")
+    fee_source: str = "none"
     raw: dict = field(repr=False, default_factory=dict)
 
 
@@ -89,6 +94,18 @@ class BookTop:
         return (self.bid + self.ask) / 2
 
 
+@dataclass
+class MarketLifecycle:
+    """Exchange-reported market lifecycle state (2026-07-17, M3): drives the
+    close reaper and settlement realization. `status`/`result` are the venue's
+    raw strings; `close_time` is an ISO timestamp ("" when unknown)."""
+
+    ticker: str
+    status: str  # Kalshi: initialized|inactive|active|closed|determined|disputed|amended|finalized
+    result: str  # Kalshi: "yes"|"no"|"scalar"|"" ("" until determined)
+    close_time: str
+
+
 class ExchangeAdapter(abc.ABC):
     """Minimal surface a market-making strategy needs from an exchange.
 
@@ -108,6 +125,7 @@ class ExchangeAdapter(abc.ABC):
         count: int,
         client_order_id: str,
         expiration_seconds: Optional[int] = None,
+        post_only: bool = True,
     ) -> Order: ...
 
     @abc.abstractmethod
@@ -124,6 +142,11 @@ class ExchangeAdapter(abc.ABC):
     @abc.abstractmethod
     async def get_positions(self) -> dict[str, int]:
         """ticker -> signed yes-equivalent contracts"""
+
+    @abc.abstractmethod
+    async def get_market_status(self, ticker: str) -> Optional[MarketLifecycle]:
+        """Lifecycle state for one market (2026-07-17, M3): settlement
+        detection and the close reaper poll this. None when unknown."""
 
     @abc.abstractmethod
     async def get_balance(self) -> Decimal: ...

@@ -1,0 +1,33 @@
+# 2026-07-17 (DEPLOY): keep the image lean and secrets out of the build context.
+
+# vcs / venv / caches
+.git
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+.ruff_cache
+.DS_Store
+
+# secrets & local tuning — credentials arrive as fly secrets at runtime,
+# tuned params stay on the laptop (two-key gate: see docs/deploy.md)
+.env
+*.pem
+*.key
+config.local.yaml
+
+# runtime state & logs — the fly volume provides /app/data instead
+data/
+analysis_snapshot/
+
+# not needed at runtime
+tests/
+docs/
+scripts/
+REVIEW-2026-07-17.md
+FORENSIC-REPORT-2026-07-17.md
+ROADMAP.md
+CLAUDE.md
+fly.toml
+.dockerignore
+.python-version

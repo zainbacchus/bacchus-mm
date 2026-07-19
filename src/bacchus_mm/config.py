@@ -15,6 +15,7 @@ from typing import Any, Optional
 
 import yaml
 
+from .fees import FeeSchedule
 from .risk import RiskParams
 from .selector import SelectorParams
 from .strategy.avellaneda_stoikov import StrategyParams
@@ -76,6 +77,31 @@ class Config:
     fast_move_confirm_updates: int
     guard_evict_trips: int
     selector_refresh_minutes: int
+    # 2026-07-17 (M1): batched eventlog writes + events-table retention.
+    log_flush_seconds: float = 1.0
+    log_flush_batch: int = 500
+    log_events_keep_days: int = 14
+    # 2026-07-17 (M3): periodic mid/pnl marks, close reaper, settlement poll.
+    marks_tick_seconds: float = 60.0
+    close_reaper_hours: float = 12.0
+    settlement_poll_seconds: float = 900.0
+    # 2026-07-17 (M2): ws receive timeout so a resubscribe can't starve on a
+    # quiet book.
+    ws_recv_timeout_seconds: float = 30.0
+    # 2026-07-17 (M5): prod+live refuses to trade without the exchange-side
+    # order group unless this escape hatch is explicitly set.
+    allow_no_order_group: bool = False
+    # 2026-07-17 (M4): wind-down distress alerting (+ owner-gated escalation).
+    winddown_alert_minutes: float = 30.0
+    winddown_alert_move: Decimal = Decimal("0.05")
+    winddown_escalation: str = "none"
+    # 2026-07-17 (M7): per-venue fee schedules (kalshi default always present).
+    fees: dict[str, FeeSchedule] = field(default_factory=dict)
+    # 2026-07-17 (DEPLOY): /health endpoint for fly.io machine checks. The
+    # HEALTH_PORT env var (set by fly.toml) force-enables it and wins over
+    # health.port — containers get it without touching config files.
+    health_enabled: bool = False
+    health_port: int = 8080
     raw: dict = field(repr=False, default_factory=dict)
 
     @classmethod
@@ -92,6 +118,20 @@ class Config:
         stra = data.get("strategy", {})
         risk = data.get("risk", {})
         exch = data.get("exchange", {})
+        log_cfg = data.get("logging", {})
+        health_cfg = data.get("health", {})
+
+        # 2026-07-17 (M7): per-venue fee schedules; kalshi defaults apply even
+        # without a fees: block so the adapter always has a schedule.
+        fee_schedules = {
+            venue: FeeSchedule(
+                taker_rate=_dec(f or {}, "taker_rate", Decimal("0.07")),
+                maker_rate=_dec(f or {}, "maker_rate", Decimal("0")),
+                formula=(f or {}).get("formula", "kalshi_v1"),
+            )
+            for venue, f in data.get("fees", {}).items()
+        }
+        fee_schedules.setdefault("kalshi", FeeSchedule())
 
         selector = SelectorParams(
             categories=sel.get("categories", SelectorParams().categories),
@@ -130,7 +170,12 @@ class Config:
         )
         return cls(
             env=os.environ.get("KALSHI_ENV", data.get("env", "demo")),
-            live_enabled=bool(data.get("live", {}).get("enabled", False)),
+            # 2026-07-17 (DEPLOY): containers have no config.local.yaml, so the
+            # config-file half of the two-key prod gate also comes from an env
+            # var there (BACCHUS_LIVE_ENABLED=1) — still two deliberate keys,
+            # now env var + --live flag. See docs/deploy.md.
+            live_enabled=bool(data.get("live", {}).get("enabled", False))
+            or os.environ.get("BACCHUS_LIVE_ENABLED", "").lower() in ("1", "true", "yes"),
             data_dir=root / data.get("logging", {}).get("dir", "data"),
             write_tokens_per_second=float(exch.get("write_tokens_per_second", 50)),
             order_group_contracts_per_15s=int(risk.get("order_group_contracts_per_15s", 40)),
@@ -150,6 +195,26 @@ class Config:
             fast_move_confirm_updates=int(stra.get("fast_move_confirm_updates", 2)),
             guard_evict_trips=int(stra.get("guard_evict_trips", 8)),
             selector_refresh_minutes=int(sel.get("refresh_minutes", 30)),
+            log_flush_seconds=float(log_cfg.get("flush_seconds", 1.0)),
+            log_flush_batch=int(log_cfg.get("flush_batch", 500)),
+            log_events_keep_days=int(log_cfg.get("events_keep_days", 14)),
+            # 2026-07-17 (M3/M2): ops cadences live under exchange:.
+            marks_tick_seconds=float(exch.get("marks_tick_seconds", 60)),
+            close_reaper_hours=float(exch.get("close_reaper_hours", 12)),
+            settlement_poll_seconds=float(exch.get("settlement_poll_seconds", 900)),
+            ws_recv_timeout_seconds=float(exch.get("ws_recv_timeout_seconds", 30)),
+            # 2026-07-17 (M5): fail-closed order-group requirement (risk:).
+            allow_no_order_group=bool(risk.get("allow_no_order_group", False)),
+            # 2026-07-17 (M4): wind-down distress policy (strategy:).
+            winddown_alert_minutes=float(stra.get("winddown_alert_minutes", 30)),
+            winddown_alert_move=_dec(stra, "winddown_alert_move", Decimal("0.05")),
+            winddown_escalation=str(stra.get("winddown_escalation", "none")),
+            fees=fee_schedules,
+            # 2026-07-17 (DEPLOY): HEALTH_PORT (fly sets it) force-enables the
+            # endpoint and overrides the configured port.
+            health_enabled=bool(health_cfg.get("enabled", False))
+            or "HEALTH_PORT" in os.environ,
+            health_port=int(os.environ.get("HEALTH_PORT", health_cfg.get("port", 8080))),
             raw=data,
         )
 

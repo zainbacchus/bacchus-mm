@@ -180,7 +180,7 @@ class _StubExchange:
         self.canceled: list[str] = []
 
     async def create_order(self, ticker, side, price, count, client_order_id,
-                           expiration_seconds=None):
+                           expiration_seconds=None, post_only=True):
         self._n += 1
         return Order(order_id=f"o{self._n}", client_order_id=client_order_id,
                      ticker=ticker, side=side, price=price, count=count)
@@ -258,3 +258,70 @@ def test_new_high_water_flag_set_when_cumulative_pnl_exceeds(tmp_path):
     rm.drawdown()
     assert rm.high_water == Decimal("1.00")
     assert rm.new_high_water_since_load
+
+
+# ------------------------------------------------- M3: settlement realization
+
+def test_settlement_long_yes_win(rm):
+    # Long 5 YES at 0.40; market settles yes ($1): +5 x (1.00 - 0.40) = +$3.00.
+    rm.on_fill("MKT", 5, Decimal("0.40"))
+    q, basis, realized = rm.on_settlement("MKT", Decimal(1))
+    assert q == 5 and basis == Decimal("0.40") and realized == Decimal("3.00")
+    st = rm.markets["MKT"]
+    assert st.position == 0 and st.settled
+    assert rm.pnl() == Decimal("3.00")  # frozen into cash, no mid needed
+
+
+def test_settlement_long_yes_lose(rm):
+    # Long 5 YES at 0.40; settles no ($0): -$2.00.
+    rm.on_fill("MKT", 5, Decimal("0.40"))
+    q, basis, realized = rm.on_settlement("MKT", Decimal(0))
+    assert realized == Decimal("-2.00")
+    assert rm.pnl() == Decimal("-2.00")
+
+
+def test_settlement_short_yes_win(rm):
+    # Short 5 YES-equivalent at 0.40 (= bought 5 NO at 0.60, cost $3); market
+    # settles no -> NO pays $1 each: +$2.00.
+    rm.on_fill("MKT", -5, Decimal("0.40"))
+    q, basis, realized = rm.on_settlement("MKT", Decimal(0))
+    assert q == -5 and basis == Decimal("0.40")  # yes-equivalent entry
+    assert realized == Decimal("2.00")
+    assert rm.pnl() == Decimal("2.00")
+
+
+def test_settlement_short_yes_lose(rm):
+    # Same short; market settles yes -> the NO side dies: -$3.00.
+    rm.on_fill("MKT", -5, Decimal("0.40"))
+    _, _, realized = rm.on_settlement("MKT", Decimal(1))
+    assert realized == Decimal("-3.00")
+    assert rm.pnl() == Decimal("-3.00")
+
+
+def test_settlement_is_net_of_fee(rm):
+    # Fees were booked at fill time; settlement adds none: long 5 at 0.40
+    # with a $0.09 fee realizes 3.00 - 0.09.
+    rm.on_fill("MKT", 5, Decimal("0.40"), fee=Decimal("0.09"))
+    _, basis, realized = rm.on_settlement("MKT", Decimal(1))
+    assert basis == Decimal("2.09") / 5  # net-of-fee average entry (2.00 + 0.09)
+    assert realized == Decimal("2.91")
+    assert rm.pnl() == Decimal("2.91")
+
+
+def test_settlement_seeded_unvalued_position_starts_flat(rm):
+    # A position seeded from the exchange with no mid ever seen: the seed
+    # convention (session PnL starts at zero) values it at settlement.
+    rm.seed_position("MKT", 5, None)
+    q, basis, realized = rm.on_settlement("MKT", Decimal(1))
+    assert q == 5 and realized == Decimal("0.00")
+    assert rm.pnl() == Decimal("0.00")
+
+
+def test_settlement_without_position_marks_terminal(rm):
+    # Flat market that settles: no cash movement, but it is marked settled
+    # and stops marking elsewhere (marks_tick skips it).
+    rm.on_mid("MKT", Decimal("0.60"))
+    q, basis, realized = rm.on_settlement("MKT", Decimal(1))
+    assert q == 0 and realized == 0
+    assert rm.markets["MKT"].settled
+    assert rm.markets["MKT"].last_mid == Decimal(1)

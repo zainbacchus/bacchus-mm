@@ -7,6 +7,9 @@ config.local.yaml
 # runtime state & logs
 data/
 
+# 2026-07-17 (OPS): forensic scratch (64MB of one-off analysis scripts/output)
+analysis_snapshot/
+
 # python
 .venv/
 __pycache__/

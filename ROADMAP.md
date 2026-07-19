@@ -17,6 +17,17 @@
   trips count only if the move persists past cooloff). See CLAUDE.md 2026-07-17
   section for the invariants an editing session must not regress. 91 tests.
 
+- **P1 scale-safety + deploy batch (2026-07-17, branch p1-scaling-batch)** —
+  batched eventlog writes + 14d events retention (fills/mids/pnl/kv stay
+  synchronous); fee model (reported fee_cost preferred, formula fallback;
+  net-of-fee PnL/markouts — net is the S2-gate number); marks tick +
+  12h close reaper + settlement realization; ws recv timeout (resubscribe
+  can't starve); order-group fail-closed on prod; create_order adopt-or-
+  replace (never double-place); wind-down distress alerts (escalation
+  plumbed, default none); cancels scoped to managed tickers (second strategy
+  can share the account); Dockerfile + fly.toml + health endpoint +
+  docs/deploy.md runbook (~$2.10/mo). 172 tests. See CLAUDE.md P1 section.
+
 ## Phase B — Polymarket as a fair-value signal (future)
 
 Feed the Polymarket mid into Kalshi quoting for mapped markets:
@@ -67,7 +78,8 @@ Hard prerequisites before any of this:
 - **Intra-Kalshi structural consistency** — strike ladders must be monotonic,
   partition outcomes must sum to ~$1; quote legs against siblings. Same
   exchange, same resolution rules, so no cross-venue basis risk. Likely the
-  best risk-adjusted expansion, ahead of Phase C.
+  best risk-adjusted expansion, ahead of Phase C. Fee model (its hard
+  prerequisite) shipped 2026-07-17 — shadow scanner is unblocked.
 - **Queue-aware quoting** — Kalshi exposes order queue position; keep/replace
   decisions should know whether we're near the front.
 - **Multi-level laddering** — 2-3 levels per side once single-level earns.
@@ -116,15 +128,15 @@ Hard prerequisites before any of this:
 
 - Raise `selector.min_hours_to_close` if same-day settlement markets (daily
   temperature) prove toxic in observe logs.
-- Fly.io deployment (Dockerfile + volume for data/) — priority raised
-  2026-07-16: lid-close sleep blacked out ~7h of quoting across two episodes
-  in one day; laptop hosting is now the biggest single uptime cost.
+- Fly.io deployment: ARTIFACTS DONE 2026-07-17 (Dockerfile, fly.toml, health
+  endpoint, docs/deploy.md runbook, ~$2.10/mo). Remaining: owner runs flyctl
+  auth + `fly deploy` (no flyctl on the build machine).
 - Reconcile fills via REST on websocket reconnect (fills during the <=15min
   pre-TTL sleep window are invisible until restart). Partially done 2026-07-17:
   reconcile.py resyncs ORDER state every 45s live; historical FILLS during a
   disconnect are still unreconciled (dedup groundwork in place).
 - Order amend instead of cancel/replace where it saves rate-limit tokens.
-- Settlement handling mid-session (positions in settled markets currently
-  just stop marking).
+- Settlement handling mid-session: DONE 2026-07-17 (marks tick, 12h close
+  reaper → wind-down, settlement realized into risk via on_settlement).
 - In-session selector refresh (config has refresh_minutes but markets are
   currently fixed at session start; miscategorized picks persist until restart).

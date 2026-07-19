@@ -23,6 +23,21 @@ exchange:
   # sweep_cooloff_seconds, then re-arms automatically (not the kill switch).
   reconcile_seconds: 45
   sweep_cooloff_seconds: 900
+  # 2026-07-17 (M2): max wait on one websocket receive. The resubscribe flag
+  # is only checked between messages; on a quiet book a bench promotion could
+  # stay unsubscribed for hours. This caps the starvation at 30s of silence.
+  ws_recv_timeout_seconds: 30
+  # 2026-07-17 (M3): settlement & close-time handling. marks_tick_seconds is
+  # the periodic mid/pnl mark cadence (today marks only happen on book deltas,
+  # so a market that goes quiet stops marking). close_reaper_hours: below this
+  # many hours to close, quotes are pulled and the market is never re-quoted
+  # (a held position converts to the wind-down machinery instead of being
+  # abandoned). settlement_poll_seconds: REST poll over tickers with open
+  # positions, realizing position x (settlement - basis) when the market
+  # reports determined/finalized with a result.
+  marks_tick_seconds: 60
+  close_reaper_hours: 12
+  settlement_poll_seconds: 900
 
 selector:
   # Calm categories only: news-driven categories (sports, crypto prices) will
@@ -85,6 +100,19 @@ strategy:
   # A market tripping the guard this many times in one session is evicted for
   # the session (2026-07-15: gas-CPI tripped 51x in 2.9h = pure cool-off churn).
   guard_evict_trips: 8
+  # 2026-07-17 (M4): wind-down exit urgency. Wind-down exits rest post-only;
+  # a position that stays unfilled past winddown_alert_minutes OR moves
+  # against us by >= winddown_alert_move emits a loud winddown_distress event
+  # (repeating at most every 15 min per market) — the 07-16 failure mode was
+  # a short running 24c with a passive exit resting forever.
+  winddown_alert_minutes: 30
+  winddown_alert_move: 0.05
+  # Escalation hatch, PLUMBED BUT DISABLED. "cross_1tick" lets a DISTRESSED
+  # wind-down exit (and nothing else) cross one tick as a taker. FLIPPING
+  # THIS IS AN EXPLICIT OWNER DECISION that weakens the post-only invariant —
+  # even then the path still gates through approve_order and the fee model
+  # (crosses only when the taker fee is smaller than the adverse move).
+  winddown_escalation: none # none | cross_1tick
 
 risk:
   max_contracts_per_market: 20
@@ -92,6 +120,44 @@ risk:
   max_gross_notional: 600 # dollars across all markets
   kill_switch_drawdown: 250 # halt at this drawdown from the ACCOUNT high-water (2026-07-17)
   order_group_contracts_per_15s: 40 # exchange-side runaway limit (Kalshi order group)
+  # 2026-07-17 (M5): on prod+live, failure to create the order group (safety
+  # layer 4, the exchange-side runaway guard) ABORTS startup. Setting this
+  # true reverts to the old warn-and-trade-on behavior — an explicit owner
+  # decision to run without that layer.
+  allow_no_order_group: false
 
 logging:
   dir: data
+  # 2026-07-17 (M1): events/mids writes are queued and flushed in one
+  # transaction every flush_seconds or flush_batch rows, whichever first
+  # (was: commit+fsync per row — 145k rows/62MB in 4 days at 8 markets).
+  # fills/pnl/kv stay synchronous: they carry money state and the dedup seed.
+  flush_seconds: 1.0
+  flush_batch: 500
+  # Retention prunes ONLY the events firehose; the JSONL files are the
+  # archive and fills/mids/pnl_marks/venue_marks/kv are kept forever.
+  # Set <= 0 to disable pruning.
+  events_keep_days: 14
+
+# 2026-07-17 (DEPLOY): /health endpoint for fly.io machine checks (runbook:
+# docs/deploy.md). Off by default locally; the HEALTH_PORT env var (set in
+# fly.toml) force-enables it and overrides the port, so containers need no
+# config change. 200 when healthy; 503 when halted or no event for 300s.
+health:
+  enabled: false
+  port: 8080
+
+# 2026-07-17 (M7): per-venue fee schedules. Kalshi's general schedule charges
+# TAKER fills only: fees = round_up(0.07 x C x P x (1-P)) to the next cent
+# (https://kalshi.com/docs/kalshi-fee-schedule.pdf, verified 2026-07-17;
+# INX/NASDAQ-100 series use 0.035, election markets are fee-free — override
+# here if we ever trade them). Our orders are post-only makers, but the ws
+# reports fee_cost per fill and net-of-fee expectancy is the S2 gate metric.
+# The adapter prefers the reported fee_cost and falls back to this formula.
+# Add a polymarket: block when that adapter lands (PM US has nonzero base fees).
+fees:
+  kalshi:
+    formula: kalshi_v1 # ceil(rate x C x P x (1-P) x 100)/100 dollars
+    taker_rate: 0.07
+    maker_rate: 0.0 # resting orders are free on Kalshi's general schedule
+

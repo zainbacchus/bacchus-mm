@@ -24,9 +24,21 @@ def _connect(data_dir: Path) -> sqlite3.Connection:
     db_path = Path(data_dir) / "bacchus.db"
     if not db_path.exists():
         raise SystemExit(f"no log database at {db_path} — run the bot first")
-    conn = sqlite3.connect(db_path)
+    # 2026-07-18 (round 2): open READ-ONLY. analyze runs against the live DB
+    # while the bot writes; the previous code opened read-write and ran an
+    # ALTER TABLE, which contends for the single WAL write lock and can raise
+    # 'database is locked'. A pre-M7 DB (no fee column) is handled by fee_col()
+    # degrading to 0, not by mutating the file.
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def fee_col(conn: sqlite3.Connection) -> str:
+    """`fee` if the column exists (M7+ DB), else the literal `0` — lets analyze
+    read a pre-M7 DB read-only without an in-place migration (2026-07-18)."""
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(fills)")}
+    return "fee" if "fee" in cols else "0"
 
 
 def _since_ms(hours: float) -> int:
@@ -54,11 +66,12 @@ def report_summary(conn: sqlite3.Connection, hours: float) -> None:
     print(f"gross position: {last_row['gross_contracts']} contracts")
     print()
     rows = conn.execute(
-        """SELECT ticker,
+        f"""SELECT ticker,
                   COUNT(*) fills,
                   SUM(ABS(signed_count)) contracts,
                   SUM(CASE WHEN is_taker THEN 1 ELSE 0 END) taker_fills,
                   SUM(signed_count) net_position_delta,
+                  SUM({fee_col(conn)}) fees,
                   AVG(CASE WHEN mid_at_fill IS NOT NULL
                        THEN (mid_at_fill - yes_price) * SIGN(signed_count) END) avg_edge_at_fill
            FROM fills WHERE ts_ms >= ? GROUP BY ticker ORDER BY contracts DESC""",
@@ -67,35 +80,57 @@ def report_summary(conn: sqlite3.Connection, hours: float) -> None:
     if not rows:
         print("no fills in window")
         return
-    print(f"{'ticker':40s} {'fills':>5s} {'ctrct':>5s} {'taker':>5s} {'netΔ':>5s} {'edge@fill':>9s}")
+    # 2026-07-17 (M7): net expectancy = gross edge minus fees per contract.
+    # The S2 gate is judged on net, so print both.
+    print(
+        f"{'ticker':40s} {'fills':>5s} {'ctrct':>5s} {'taker':>5s} {'netΔ':>5s}"
+        f" {'edge@fill':>9s} {'fees':>7s} {'net@fill':>9s}"
+    )
+    total_fees = 0.0
     for r in rows:
-        edge = f"{r['avg_edge_at_fill']:+.4f}" if r["avg_edge_at_fill"] is not None else "     n/a"
+        edge = r["avg_edge_at_fill"]
+        fees = r["fees"] or 0.0
+        total_fees += fees
+        net = edge - fees / r["contracts"] if edge is not None and r["contracts"] else None
+        edge_s = f"{edge:+.4f}" if edge is not None else "     n/a"
+        net_s = f"{net:+.4f}" if net is not None else "     n/a"
         print(
             f"{r['ticker']:40s} {r['fills']:5d} {r['contracts']:5d} "
-            f"{r['taker_fills']:5d} {r['net_position_delta']:+5d} {edge:>9s}"
+            f"{r['taker_fills']:5d} {r['net_position_delta']:+5d} {edge_s:>9s}"
+            f" {fees:7.2f} {net_s:>9s}"
         )
-    print("\nedge@fill = (mid - price) * sign: how far inside the mid we were paid on average.")
+    print(f"\ntotal fees in window: ${total_fees:.2f}")
+    print("edge@fill = (mid - price) * sign: how far inside the mid we were paid on average.")
+    print("net@fill = edge@fill - fees/contracts (gross vs net-of-fee expectancy; S2 gates on net).")
 
 
 def report_markouts(conn: sqlite3.Connection, hours: float) -> None:
     since = _since_ms(hours)
     fills = conn.execute(
-        "SELECT ts_ms, ticker, signed_count, yes_price FROM fills WHERE ts_ms >= ?", (since,)
+        f"SELECT ts_ms, ticker, signed_count, yes_price, {fee_col(conn)} AS fee "
+        "FROM fills WHERE ts_ms >= ?",
+        (since,),
     ).fetchall()
     if not fills:
         print(f"no fills in the last {hours:g}h")
         return
     print(f"== markouts (last {hours:g}h, {len(fills)} fills) ==")
-    header = f"{'ticker':40s} {'n':>4s}" + "".join(f" {'mo+' + str(w) + 's':>10s}" for w in MARKOUT_WINDOWS_S)
+    # 2026-07-17 (M7): every cell shows gross then net-of-fee — the S2 gate
+    # metric is NET markout per contract, so both must be visible.
+    header = f"{'ticker':40s} {'n':>4s}" + "".join(
+        f" {'mo+' + str(w) + 's':>10s} {'net':>10s}" for w in MARKOUT_WINDOWS_S
+    )
     print(header)
     by_ticker: dict[str, list] = {}
     for f in fills:
         by_ticker.setdefault(f["ticker"], []).append(f)
     totals = {w: [] for w in MARKOUT_WINDOWS_S}
+    totals_net = {w: [] for w in MARKOUT_WINDOWS_S}
+    contracts = {w: 0 for w in MARKOUT_WINDOWS_S}
     for ticker, rows in sorted(by_ticker.items()):
         cells = []
         for w in MARKOUT_WINDOWS_S:
-            vals = []
+            vals, nets = [], []
             for f in rows:
                 mid = conn.execute(
                     "SELECT mid FROM mids WHERE ticker = ? AND ts_ms >= ? ORDER BY ts_ms LIMIT 1",
@@ -105,15 +140,26 @@ def report_markouts(conn: sqlite3.Connection, hours: float) -> None:
                     continue
                 sign = 1 if f["signed_count"] > 0 else -1
                 per_contract = (mid["mid"] - f["yes_price"]) * sign
-                vals.append(per_contract * abs(f["signed_count"]))
-                totals[w].append(per_contract * abs(f["signed_count"]))
+                gross = per_contract * abs(f["signed_count"])
+                vals.append(gross)
+                nets.append(gross - f["fee"])
+                totals[w].append(gross)
+                totals_net[w].append(gross - f["fee"])
+                contracts[w] += abs(f["signed_count"])
             cells.append(f"{sum(vals)/len(vals):+10.4f}" if vals else f"{'n/a':>10s}")
+            cells.append(f"{sum(nets)/len(nets):+10.4f}" if nets else f"{'n/a':>10s}")
         print(f"{ticker:40s} {len(rows):4d}" + " ".join([""] + cells))
-    print("\ntotals (sum $ across all fills):")
+    print("\ntotals (sum $ across all fills; net = gross - fees):")
     for w in MARKOUT_WINDOWS_S:
         if totals[w]:
-            print(f"  +{w}s: {sum(totals[w]):+.2f} over {len(totals[w])} fills")
+            gross, net = sum(totals[w]), sum(totals_net[w])
+            per = net / contracts[w] if contracts[w] else 0.0
+            print(
+                f"  +{w}s: gross {gross:+.2f} | net-of-fee {net:+.2f} "
+                f"({per * 100:+.2f}c/contract) over {len(totals[w])} fills"
+            )
     print("\npositive = market moved our way after fills; negative = we're being picked off.")
+    print("net-of-fee per contract is the S2 gate metric (target >= +0.5c at +600s).")
 
 
 def report_quotes(conn: sqlite3.Connection, hours: float) -> None:

@@ -79,6 +79,13 @@ and the `--live` flag — a two-key deliberate action, never a default. Before t
 first live run, `bacchus-mm selftest --live` proves the order plumbing with a
 single 1-contract $0.01 post-only round trip (place → rest → cancel → verify).
 
+## Deploy (fly.io)
+
+For 24/7 operation the bot deploys to fly.io as a single worker Machine with a
+1GB volume for `data/`, an internal `/health` machine check, and auto-restart —
+no more laptop-lid blackouts, ~$2/mo. The repo ships the `Dockerfile`,
+`fly.toml`, and the full step-by-step runbook: [docs/deploy.md](docs/deploy.md).
+
 ## Configuration
 
 `config.yaml` holds public defaults. Create `config.local.yaml` (gitignored) and

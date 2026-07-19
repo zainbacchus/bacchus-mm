@@ -19,16 +19,19 @@ import sys
 import time
 import traceback
 import uuid
+from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
+from typing import Optional
 
 from .config import Config
 from .crossvenue import VenuePair, run_recorder
 from .eventlog import EventLog
 from .exchange.base import Fill
-from .exchange.kalshi import KalshiAuth, KalshiExchange
+from .exchange.kalshi import KalshiAuth, KalshiExchange, rest_clock_skew_seconds
+from .health import HealthState, start_health_server
 from .marketmaker import MarketWorker, QuotingGate, WorkerConfig
-from .reconcile import reconcile_loop
+from .reconcile import managed_tickers, reconcile_loop
 from .risk import RiskManager, RiskParams
 from .selector import select_markets
 
@@ -61,7 +64,9 @@ def _build_exchange(cfg: Config, need_auth: bool) -> KalshiExchange:
             "demo.kalshi.co account settings."
         )
     return KalshiExchange(
-        env=cfg.env, auth=auth, write_tokens_per_second=cfg.write_tokens_per_second
+        env=cfg.env, auth=auth, write_tokens_per_second=cfg.write_tokens_per_second,
+        fee_schedule=cfg.fees.get("kalshi"),
+        ws_recv_timeout_seconds=cfg.ws_recv_timeout_seconds,
     )
 
 
@@ -132,7 +137,7 @@ class FillDispatcher:
             return
         w = self.workers.get(f.ticker)
         mid = w.current_mid() if w else None
-        self.risk.on_fill(f.ticker, f.signed_count, f.yes_price)
+        self.risk.on_fill(f.ticker, f.signed_count, f.yes_price, f.fee)
         if tid:
             # The fill is on the books now; ignore any redelivery even if the
             # record below fails.
@@ -141,6 +146,7 @@ class FillDispatcher:
             self.events.record_fill(
                 f.ticker, f.trade_id, f.order_id, f.signed_count,
                 f.yes_price, f.is_taker, mid, f.ts_ms,
+                fee=f.fee, fee_source=f.fee_source,
             )
         except Exception:  # noqa: BLE001 — DB full/locked; stdlib log is the record
             log.exception("record_fill failed (trade %s) — fill applied, log row lost", tid)
@@ -153,9 +159,10 @@ class FillDispatcher:
                 pass
         if w:
             w.order_filled(f.order_id, abs(f.signed_count))
+        fee_note = f" fee=${f.fee:.2f}({f.fee_source})" if f.fee else ""
         log.info(
-            "FILL %s %+d @ %.2f (taker=%s) pos=%d pnl=$%.2f",
-            f.ticker, f.signed_count, f.yes_price, f.is_taker,
+            "FILL %s %+d @ %.2f (taker=%s)%s pos=%d pnl=$%.2f",
+            f.ticker, f.signed_count, f.yes_price, f.is_taker, fee_note,
             self.risk.markets[f.ticker].position,
             self.risk.cumulative_pnl,  # 2026-07-17: cumulative, not session
         )
@@ -182,6 +189,193 @@ def persist_pnl_marks(events: EventLog, risk: RiskManager) -> None:
     events.kv_set("cumulative_pnl", str(risk.cumulative_pnl))
     events.kv_set("high_water", str(risk.high_water))
     risk.new_high_water_since_load = False
+
+
+def marks_tick(
+    workers: dict[str, MarketWorker],
+    risk: RiskManager,
+    events: EventLog,
+    tick_seconds: float,
+    now: Optional[float] = None,
+) -> int:
+    """Periodic mark writer (2026-07-17, M3). Today mids only reach the mids
+    table inside on_book_top — a market that goes quiet (frozen book, closed
+    but unsettled, eviction) stops marking and its position pins at a stale
+    mid. Every tick_seconds: write a mid mark for every market that hasn't
+    marked itself recently, plus one pnl mark (risk_loop's 5s marks cover the
+    kill switch; this guarantees a durable mark even in a dead-quiet
+    session). Settled markets keep their final mark and are skipped."""
+    now = time.monotonic() if now is None else now
+    marked = 0
+    for t, st in risk.markets.items():
+        if st.last_mid is None or st.settled:
+            continue
+        w = workers.get(t)
+        if w is not None and not w.evicted and now - w._last_mid_mark < tick_seconds:
+            continue  # healthy worker already marking itself via book deltas
+        bid = w.top.bid if w is not None and w.top is not None else None
+        ask = w.top.ask if w is not None and w.top is not None else None
+        events.record_mid(t, st.last_mid, bid, ask)
+        marked += 1
+    events.record_pnl(
+        risk.cumulative_pnl, risk.high_water, risk.drawdown(), risk.gross_contracts()
+    )
+    return marked
+
+
+def reap_closing_markets(
+    workers: dict[str, MarketWorker],
+    risk: RiskManager,
+    events: EventLog,
+    close_times: dict[str, str],
+    reaper_hours: float,
+    now: Optional[datetime] = None,
+) -> list[str]:
+    """Close reaper (2026-07-17, M3): min_hours_to_close is checked only at
+    selection, so markets get quoted right into their close. When a market's
+    hours-to-close drops below reaper_hours: pull its quotes and never
+    re-quote it (the worker's close_reaped flag does the pulling on its next
+    cycle; marking continues). A reaped market WITH a position converts to
+    the existing wind-down machinery (reduce-only exit quotes until flat)
+    rather than being abandoned. Emits close_reaper with hours-to-close."""
+    now = datetime.now(timezone.utc) if now is None else now
+    reaped: list[str] = []
+    for t, close_iso in close_times.items():
+        w = workers.get(t)
+        if w is None or w.close_reaped or w.reduce_only or w.evicted:
+            continue
+        try:
+            close_dt = datetime.fromisoformat(close_iso.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        # 2026-07-18 (round 2): a naive close_time parses fine but subtracting
+        # from tz-aware `now` raises TypeError (not ValueError), which would
+        # abort the whole reaper tick at the first offender. Coerce to UTC.
+        if close_dt.tzinfo is None:
+            close_dt = close_dt.replace(tzinfo=timezone.utc)
+        hours = (close_dt - now).total_seconds() / 3600
+        if hours >= reaper_hours:
+            continue
+        st = risk.markets.get(t)
+        q = st.position if st else 0
+        w.close_reaped = True
+        if q != 0:
+            w.reduce_only = True  # wind-down machinery, same as evict-with-position
+        w.wake()  # the worker pulls its own quotes on its next cycle
+        events.emit(
+            "close_reaper", ticker=t, hours_to_close=round(hours, 2),
+            position=q, wind_down=q != 0,
+        )
+        log.warning(
+            "close reaper: %s closes in %.1fh — quotes pulled%s",
+            t, hours, "; position %+d -> wind-down" % q if q else "",
+        )
+        reaped.append(t)
+    return reaped
+
+
+async def settlement_poll(
+    ex: KalshiExchange,
+    risk: RiskManager,
+    events: EventLog,
+    close_times: dict[str, str],
+    workers: Optional[dict[str, MarketWorker]] = None,
+) -> list[str]:
+    """Settlement realization (2026-07-17, M3): one pass over tickers with
+    open positions. Kalshi's lifecycle is open -> closed -> determined ->
+    (disputed -> amended)? -> finalized. Payout is $1 per YES on a yes result,
+    $0 on no — realized into risk as position x (settlement - basis),
+    net-of-fee (no settlement fee; fees were booked at fill time).
+
+    2026-07-18 (round 2): realize ONLY at `finalized`. `determined` can still be
+    disputed/amended, and realizing there locks in a possibly-wrong outcome that
+    on_settlement freezes permanently (settled=True). The position stays visible
+    and marked-to-mid (which tracks ~settlement post-determination anyway) until
+    finalized. On realize we persist a settled marker (survives restart, so the
+    still-reported position can't be double-realized) and retire the worker so a
+    settled market stops quoting even if it determined before the close reaper's
+    window. Emits settlement_realized and backfills close_times for the reaper."""
+    realized: list[str] = []
+    for t, st in list(risk.markets.items()):
+        if st.position == 0 or st.settled:
+            continue
+        m = await ex.get_market_status(t)
+        if m is None:
+            continue
+        if m.close_time:
+            close_times.setdefault(t, m.close_time)
+        if m.status == "finalized" and m.result in ("yes", "no"):
+            settle = Decimal(1) if m.result == "yes" else Decimal(0)
+            q, basis, pnl = risk.on_settlement(t, settle)
+            events.mark_settled(t, str(settle))
+            events.emit(
+                "settlement_realized", ticker=t, position=q, basis=basis,
+                settlement=settle, pnl=pnl, status=m.status,
+            )
+            log.info(
+                "SETTLED %s: %+d @ basis %s -> %s, realized $%.2f",
+                t, q, basis, m.result, pnl,
+            )
+            # Retire the worker: position is 0 now, so evicted drops it from
+            # active_tickers() and stops re-quoting a dead market even if it
+            # resolved before the reaper's 12h window.
+            w = workers.get(t) if workers else None
+            if w is not None:
+                w.close_reaped = True
+                w.evicted = True
+                w.wake()
+            realized.append(t)
+    return realized
+
+
+async def check_clock_skew(
+    ex: KalshiExchange, events: EventLog, threshold_s: float = 2.0
+) -> Optional[float]:
+    """Startup clock-skew check (2026-07-17, DEPLOY): RSA-PSS auth signs with
+    local-ms timestamps, so a skewed VPS clock fails auth opaquely. Advisory
+    only — logs loudly and emits clock_skew_warning past the threshold but
+    never blocks: Kalshi may tolerate small skew, and a failed check (DNS,
+    proxy, no Date header) must not stop trading either."""
+    try:
+        skew = await rest_clock_skew_seconds(ex.rest_url)
+    except Exception as e:  # noqa: BLE001 — advisory check, never fatal
+        log.warning("clock-skew check failed (%s) — continuing", e)
+        return None
+    if abs(skew) > threshold_s:
+        log.error(
+            "CLOCK SKEW: local clock is %+.2fs vs Kalshi (|skew| > %.1fs) — "
+            "RSA-PSS auth may fail; fix the host clock (NTP)",
+            skew, threshold_s,
+        )
+        events.emit("clock_skew_warning", skew_s=round(skew, 3), threshold_s=threshold_s)
+    else:
+        log.info("clock skew vs Kalshi: %+.3fs (within %.1fs)", skew, threshold_s)
+    return skew
+
+
+def require_order_group(cfg: Config, live: bool, gid: Optional[str], events: EventLog) -> None:
+    """Fail-closed order-group requirement (2026-07-17, M5). The Kalshi order
+    group is the exchange-side runaway guard (REVIEW-2026-07-17 safety layer
+    4): if the group fills more than N contracts in 15s, Kalshi cancels
+    everything in it. Creation failure used to log a warning and trade on
+    without it. On prod+live that is now fatal, unless the owner explicitly
+    sets risk.allow_no_order_group."""
+    if gid is not None:
+        return
+    if cfg.env == "prod" and live and not cfg.allow_no_order_group:
+        events.emit(
+            "startup_aborted", reason="order_group_unavailable", env=cfg.env,
+        )
+        sys.exit(
+            "Refusing to trade on prod: the Kalshi order group (exchange-side "
+            "runaway guard) could not be created — trading without safety "
+            "layer 4 is fail-closed. Retry, or set risk.allow_no_order_group: "
+            "true to explicitly accept the risk."
+        )
+    log.warning(
+        "continuing WITHOUT an order group (%s)",
+        "allow_no_order_group override" if cfg.allow_no_order_group else f"env={cfg.env}",
+    )
 
 
 async def cmd_markets(cfg: Config) -> None:
@@ -224,9 +418,19 @@ async def cmd_trade(cfg: Config, live: bool, dry_run: bool) -> None:
 
     ex = _build_exchange(cfg, need_auth=True)
     session_id = f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
-    events = EventLog(cfg.data_dir, session_id)
+    # 2026-07-17 (M1): batched eventlog — flush cadence/retention from config.
+    events = EventLog(
+        cfg.data_dir, session_id,
+        flush_seconds=cfg.log_flush_seconds,
+        flush_batch=cfg.log_flush_batch,
+        events_keep_days=cfg.log_events_keep_days,
+    )
     # 2026-07-17 (FIX-PnL): load the cross-session equity chain from kv.
     risk = load_chained_risk(cfg.risk, cfg.data_dir, events)
+
+    # 2026-07-17 (DEPLOY): clock-skew check before any authed call — RSA-PSS
+    # signs with local-ms timestamps (advisory: loud log + event, never blocks).
+    await check_clock_skew(ex, events)
 
     prior_halt = risk.check_halt_file()
     if prior_halt and not dry_run:
@@ -243,7 +447,24 @@ async def cmd_trade(cfg: Config, live: bool, dry_run: bool) -> None:
     workers: dict[str, MarketWorker] = {}
     tasks: list[asyncio.Task] = []
 
+    # 2026-07-17 (DEPLOY): liveness state for /health (fly.io machine checks).
+    # Emitted events and the 5s risk_loop tick both heartbeat it; see health.py.
+    health_state = HealthState(
+        mode="observe" if dry_run else "run", live=live, risk=risk, workers=workers
+    )
+    events.on_event = health_state.note_event
+    health_runner = None
+
     try:
+        if cfg.health_enabled:
+            try:
+                health_runner = await start_health_server(health_state, cfg.health_port)
+                log.info("health endpoint listening on :%d/health", cfg.health_port)
+            except OSError:
+                # Health is auxiliary — a bind failure must not take down
+                # trading; the failed fly check surfaces it instead.
+                log.exception("health endpoint failed to bind port %d", cfg.health_port)
+
         markets = await ex.list_markets()
         # Select extra markets as a standby bench: evicted workers get replaced
         # from it mid-session instead of the book shrinking all night.
@@ -308,8 +529,18 @@ async def cmd_trade(cfg: Config, live: bool, dry_run: bool) -> None:
             ).fetchone()
             return Decimal(str(row[0])) if row else None
 
+        # 2026-07-18 (round 2): a position we already realized in a prior
+        # session is still reported by the exchange until payout clears. Do NOT
+        # re-seed it — its PnL is already baked into the persisted equity chain,
+        # and re-seeding + a re-realize would double-count into the kill switch.
+        already_settled = events.settled_tickers()
+        if already_settled:
+            log.info("skipping %d already-settled tickers at seed: %s",
+                     len(already_settled), ", ".join(sorted(already_settled)))
         for s in picks:
             t = s.market.ticker
+            if t in already_settled:
+                continue
             if positions.get(t, 0):
                 risk.seed_position(t, positions[t], _last_logged_mid(t) or s.market.mid)
             else:
@@ -317,12 +548,19 @@ async def cmd_trade(cfg: Config, live: bool, dry_run: bool) -> None:
         # Orphan positions (held in markets we no longer quote) stay marked so
         # PnL and the kill switch always see the whole book.
         for t, pos in positions.items():
-            if t not in tickers:
+            if t not in tickers and t not in already_settled:
                 risk.seed_position(t, pos, _last_logged_mid(t))
 
         if not dry_run:
-            await ex.ensure_order_group(cfg.order_group_contracts_per_15s)
-            stale = await ex.cancel_all_orders()  # no orphans from previous runs
+            gid = await ex.ensure_order_group(cfg.order_group_contracts_per_15s)
+            # 2026-07-17 (M5): prod+live without the order group aborts here.
+            require_order_group(cfg, live, gid, events)
+            # 2026-07-17 (H2): scope the startup sweep to tickers we manage
+            # (selected + held) — a second strategy on this account keeps its
+            # orders. See managed_tickers for the flock caveat.
+            stale = await ex.cancel_all_orders(
+                tickers=managed_tickers(risk=risk, selected=tickers)
+            )
             if stale:
                 log.info("canceled %d stale resting orders from a previous session", stale)
 
@@ -350,7 +588,14 @@ async def cmd_trade(cfg: Config, live: bool, dry_run: bool) -> None:
             fast_move_spread_multiple=cfg.fast_move_spread_multiple,
             fast_move_confirm_updates=cfg.fast_move_confirm_updates,
             guard_evict_trips=cfg.guard_evict_trips,
+            # 2026-07-17 (M4): wind-down distress policy.
+            winddown_alert_seconds=cfg.winddown_alert_minutes * 60,
+            winddown_alert_move=cfg.winddown_alert_move,
+            winddown_escalation=cfg.winddown_escalation,
         )
+        # 2026-07-17 (M3): close times from selection (standby included);
+        # the settlement poll backfills orphan tickers as it learns them.
+        close_times = {s.market.ticker: s.market.close_time for s in all_picks}
         # 2026-07-17 (C1): one session-global quoting gate shared by every
         # worker, including wind-down workers and bench promotions.
         gate = QuotingGate()
@@ -440,6 +685,9 @@ async def cmd_trade(cfg: Config, live: bool, dry_run: bool) -> None:
             last_kv_persist = time.monotonic()
             while not stop_event.is_set():
                 await asyncio.sleep(5)
+                # 2026-07-17 (DEPLOY): liveness heartbeat — a wedged loop stops
+                # this and /health goes 503 (last_event_age_s > 300).
+                health_state.note_event()
                 # 2026-07-17 (FIX-PnL): mark the CUMULATIVE equity curve, not the
                 # session-rebased one — rebasing understated true losses 2.9x
                 # across the first 8 sessions. (Column names kept for compat;
@@ -465,15 +713,61 @@ async def cmd_trade(cfg: Config, live: bool, dry_run: bool) -> None:
                     events.emit("halt", reason=reason, pnl=pnl, drawdown=dd)
                     log.error("KILL SWITCH: %s", reason)
                     try:
-                        n = await ex.cancel_all_orders()
+                        # 2026-07-17 (H2): cancel only what WE manage.
+                        n = await ex.cancel_all_orders(
+                            tickers=managed_tickers(workers, risk)
+                        )
                         log.error("kill switch canceled %d resting orders; bot is halted", n)
                     except Exception:  # noqa: BLE001
                         log.exception("cancel-all during halt failed — CHECK THE EXCHANGE UI")
                     stop_event.set()
 
+        async def eventlog_flush_loop():
+            # 2026-07-17 (M1): time-based drain for the batched events/mids
+            # queue (count-based flush happens inline on emit). Failures stay
+            # non-fatal — the JSONL mirror is the durable firehose, and a sick
+            # DB must not trip supervise() into halting the bot over logging.
+            while not stop_event.is_set():
+                await asyncio.sleep(cfg.log_flush_seconds)
+                try:
+                    events.flush()
+                except Exception:  # noqa: BLE001
+                    log.exception("eventlog flush failed")
+
+        async def marks_loop():
+            # 2026-07-17 (M3): periodic mid/pnl marks + the close reaper share
+            # one slow tick. Failures stay non-fatal — a marking hiccup must
+            # not halt trading (same rationale as eventlog_flush_loop).
+            while not stop_event.is_set():
+                await asyncio.sleep(cfg.marks_tick_seconds)
+                try:
+                    marks_tick(workers, risk, events, cfg.marks_tick_seconds)
+                    reap_closing_markets(
+                        workers, risk, events, close_times, cfg.close_reaper_hours
+                    )
+                except Exception:  # noqa: BLE001
+                    log.exception("marks tick failed")
+
+        async def settlement_poll_loop():
+            # 2026-07-17 (M3): slow REST poll realizing settled positions.
+            while not stop_event.is_set():
+                await asyncio.sleep(cfg.settlement_poll_seconds)
+                try:
+                    await settlement_poll(ex, risk, events, close_times, workers)
+                except Exception:  # noqa: BLE001
+                    log.exception("settlement poll failed")
+
         _spawn(consume_stream(), "stream")
         _spawn(risk_loop(), "risk_loop")
         _spawn(bench_loop(), "bench_loop")
+        _spawn(eventlog_flush_loop(), "eventlog_flush")
+        _spawn(marks_loop(), "marks_loop")  # 2026-07-17 (M3)
+        # 2026-07-18 (round 2): settlement realization MUTATES risk cash/PnL, so
+        # it is live-only — the same gate reconcile uses. In observe it would
+        # book phantom money into a dry-run session's PnL. marks_loop stays
+        # unconditional (pure logging + reaper quote-pulls, no cash mutation).
+        if not dry_run:
+            _spawn(settlement_poll_loop(), "settlement_poll")  # 2026-07-17 (M3)
         for t in list(workers):
             _spawn(workers[t].run(), f"worker:{t}")
         # 2026-07-17 (C1): one global resting-order reconcile task — see
@@ -513,13 +807,27 @@ async def cmd_trade(cfg: Config, live: bool, dry_run: bool) -> None:
             t.cancel()
         if not dry_run:
             try:
-                remaining = await ex.cancel_all_orders()
-                resting = await ex.get_resting_orders()
+                # 2026-07-17 (H2): shutdown cancel scoped to our tickers —
+                # worker.stop() already canceled tracked refs; this catches
+                # stragglers on tickers we manage, not the whole account.
+                managed = managed_tickers(workers, risk)
+                remaining = await ex.cancel_all_orders(tickers=managed)
+                # 2026-07-18 (round 2): the "still resting" check is scoped to
+                # OUR tickers too — an account-wide read counts a second
+                # strategy's legitimate orders (the whole point of H2) and
+                # false-fires this alarm while masking a genuine straggler.
+                managed_set = set(managed)
+                resting = [
+                    o for o in await ex.get_resting_orders() if o.ticker in managed_set
+                ]
                 events.emit("session_stop", canceled=remaining, still_resting=len(resting))
                 if resting:
-                    log.error("%d orders STILL RESTING after shutdown — check the exchange UI", len(resting))
+                    log.error(
+                        "%d orders STILL RESTING on managed tickers after shutdown "
+                        "— check the exchange UI", len(resting)
+                    )
                 else:
-                    log.info("shutdown clean: no resting orders")
+                    log.info("shutdown clean: no resting orders on managed tickers")
             except Exception:  # noqa: BLE001
                 log.exception("shutdown cancel-all failed — CHECK THE EXCHANGE UI")
         else:
@@ -531,7 +839,14 @@ async def cmd_trade(cfg: Config, live: bool, dry_run: bool) -> None:
                 persist_pnl_marks(events, risk)
             except Exception:  # noqa: BLE001
                 log.exception("failed to persist cumulative pnl on shutdown")
+        # 2026-07-17 (M1): close() drains the batched queue first — every
+        # shutdown path (normal, halt, exception) funnels through here.
         events.close()
+        if health_runner is not None:
+            try:
+                await health_runner.cleanup()
+            except Exception:  # noqa: BLE001 — teardown must not hang
+                log.exception("health server cleanup failed")
         await ex.close()
 
 
@@ -546,7 +861,12 @@ async def cmd_crossvenue(cfg: Config) -> None:
         )
     ex = _build_exchange(cfg, need_auth=False)
     session_id = f"xv-{time.strftime('%Y%m%d-%H%M%S')}"
-    events = EventLog(cfg.data_dir, session_id)
+    events = EventLog(
+        cfg.data_dir, session_id,
+        flush_seconds=cfg.log_flush_seconds,
+        flush_batch=cfg.log_flush_batch,
+        events_keep_days=cfg.log_events_keep_days,
+    )
     log.info("cross-venue recorder: %d pairs, poll every %ss", len(pairs), raw.get("poll_seconds", 15))
     try:
         await run_recorder(pairs, ex, events, float(raw.get("poll_seconds", 15)))
@@ -589,7 +909,12 @@ async def cmd_selftest(cfg: Config, live: bool) -> None:
             "in config.local.yaml AND pass --live."
         )
     ex = _build_exchange(cfg, need_auth=True)
-    events = EventLog(cfg.data_dir, f"selftest-{time.strftime('%Y%m%d-%H%M%S')}")
+    events = EventLog(
+        cfg.data_dir, f"selftest-{time.strftime('%Y%m%d-%H%M%S')}",
+        flush_seconds=cfg.log_flush_seconds,
+        flush_batch=cfg.log_flush_batch,
+        events_keep_days=cfg.log_events_keep_days,
+    )
     try:
         markets = await ex.list_markets()
         picks = select_markets(markets, cfg.selector)
