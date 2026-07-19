@@ -31,7 +31,12 @@ class MarketInfo:
     volume_24h: Decimal
     open_interest: Decimal
     series_ticker: str = ""
-    raw: dict = field(repr=False, default_factory=dict)
+    # 2026-07-19: the only field the selector needs off the raw market payload
+    # (the falling-knife net-move screen). Retaining the FULL raw dict for all
+    # ~64k open markets during the startup scan cost ~400MB anon-rss and
+    # OOM-crash-looped the fly machine; keeping just this scalar drops the scan
+    # footprint back to ~tens of MB.
+    previous_price: Optional[Decimal] = None
 
     @property
     def spread(self) -> Optional[Decimal]:

@@ -66,8 +66,7 @@ def select_markets(markets: list[MarketInfo], p: SelectorParams) -> list[ScoredM
             continue
         if _hours_to_close(m.close_time) < p.min_hours_to_close:
             continue
-        prev = m.raw.get("previous_price_dollars")
-        if prev not in (None, "") and abs(m.mid - Decimal(str(prev))) > p.max_move_24h:
+        if m.previous_price is not None and abs(m.mid - m.previous_price) > p.max_move_24h:
             continue
         eligible.append(m)
 

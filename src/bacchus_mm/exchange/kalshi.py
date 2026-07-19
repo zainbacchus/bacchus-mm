@@ -306,7 +306,7 @@ class KalshiExchange(ExchangeAdapter):
                             yes_ask=_dec(m.get("yes_ask_dollars")),
                             volume_24h=_dec(m.get("volume_24h_fp")) or Decimal(0),
                             open_interest=_dec(m.get("open_interest_fp")) or Decimal(0),
-                            raw=m,
+                            previous_price=_dec(m.get("previous_price_dollars")),
                         )
                     )
             cursor = data.get("cursor")

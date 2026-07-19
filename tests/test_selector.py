@@ -6,14 +6,12 @@ from bacchus_mm.selector import SelectorParams, select_markets
 
 def mk(ticker, bid="0.40", ask="0.46", vol=1000, prev=None, category="Economics",
        close="2099-01-01T00:00:00Z", event=None):
-    raw = {}
-    if prev is not None:
-        raw["previous_price_dollars"] = prev
     return MarketInfo(
         ticker=ticker, event_ticker=event or ticker + "-EV", title=ticker,
         category=category, close_time=close,
         yes_bid=Decimal(bid), yes_ask=Decimal(ask),
-        volume_24h=Decimal(vol), open_interest=Decimal(0), raw=raw,
+        volume_24h=Decimal(vol), open_interest=Decimal(0),
+        previous_price=Decimal(prev) if prev is not None else None,
     )
 
 

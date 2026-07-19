@@ -53,7 +53,7 @@ kill_timeout = 60
 
 [[vm]]
   size = "shared-cpu-1x"
-  memory = "1024mb"   # 2026-07-19: startup market scan holds ~64k markets (~400MB anon-rss) -> OOM at 512; code fix to follow to bring this back down
+  memory = "512mb"   # 2026-07-19: after the scan memory fix (raw payloads no longer retained; ~150MB peak) 512mb has ~3x headroom
                      # spikes past it → crash loop); ~100MB steady state.
 
 # SQLite (bacchus.db) + JSONL logs live here and survive redeploys/crashes.
