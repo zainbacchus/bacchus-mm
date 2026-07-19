@@ -20,10 +20,10 @@ kill_timeout = 60
   # The container CMD. Demo by default. For prod this becomes
   # "bacchus-mm run --live" — one half of the two-key gate (the other half is
   # the BACCHUS_LIVE_ENABLED=1 secret). See docs/deploy.md "Going live".
-  app = "bacchus-mm run"
+  app = "bacchus-mm run --live"
 
 [env]
-  KALSHI_ENV = "demo"     # flip to "prod" only when going live (docs/deploy.md)
+  KALSHI_ENV = "prod"     # flip to "prod" only when going live (docs/deploy.md)
   HEALTH_PORT = "8080"    # force-enables the bot's /health endpoint (config.py)
 
 # Worker, not a web app: deliberately NO [http_service] / [[services]] block,
