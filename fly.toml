@@ -53,7 +53,8 @@ kill_timeout = 60
 
 [[vm]]
   size = "shared-cpu-1x"
-  memory = "256mb"   # measured footprint is small (~100MB); bump to 512mb if OOM
+  memory = "512mb"   # 2026-07-19: 256mb OOM-killed on boot (startup market scan
+                     # spikes past it → crash loop); ~100MB steady state.
 
 # SQLite (bacchus.db) + JSONL logs live here and survive redeploys/crashes.
 # Create once, SAME REGION as primary_region:
