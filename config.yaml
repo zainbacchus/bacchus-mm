@@ -45,15 +45,25 @@ selector:
   categories:
     - Economics
     - Climate and Weather
-  ticker_blocklist: [] # regexes matched against market/event tickers
+  # 2026-07-24: tuning promoted from config.local.yaml into the COMMITTED
+  # config so the fly image actually gets it — config.local.yaml is gitignored
+  # and never reached the container, so fly had been running these loose
+  # public defaults (kill switch $250, size 5, no blocklists, 12h close) the
+  # whole time. That mis-config caused the early live losses.
+  ticker_blocklist:
+    - '^KXHKANEKNIGHT'   # "will Harry Kane be knighted" — miscategorized Economics
+    - '^KXHIGH'          # daily high-temp family: jumps on weather-model runs
+    - '^KXLOWT'          # daily low-temp family
+    - '^KXMUSKNW'        # 2026-07-24: Musk net worth = Tesla-stock proxy, equity-
+                         # driven not calm; 12 fills / -$1.25 (>half of live losses)
   min_volume_24h: 500 # contracts
   min_spread: 0.02 # dollars; narrower pays too little
-  max_spread: 0.15 # wider usually means a dead or toxic market
+  max_spread: 0.10 # day-2 review: every selection with spread >=0.11 tripped/evicted
   min_price: 0.10 # stay out of the tails: asymmetric payoff risk
   max_price: 0.90
-  min_hours_to_close: 12
+  min_hours_to_close: 36 # same-day settlement markets moved up to 46c/min — exclude
   max_move_24h: 0.10 # falling-knife filter: skip markets that moved this much in 24h
-  max_markets: 6
+  max_markets: 8
   volume_weight: 0.35
   spread_weight: 0.65
   refresh_minutes: 30
@@ -76,7 +86,7 @@ strategy:
   # < -0.5c/contract over >= 60 fills.
   join_margin: 0.01
   min_book_spread: 0.02
-  quote_size: 5 # contracts per side
+  quote_size: 2 # tiny while expectancy is unproven (was 5 default)
   requote_min_interval: 1.0 # seconds between requote evaluations per market
   requote_tolerance: 0.01 # don't churn orders for < 1 tick of movement
   order_ttl_seconds: 900 # exchange-side expiry: orphaned orders die on their own
@@ -99,7 +109,7 @@ strategy:
   fast_move_confirm_updates: 2
   # A market tripping the guard this many times in one session is evicted for
   # the session (2026-07-15: gas-CPI tripped 51x in 2.9h = pure cool-off churn).
-  guard_evict_trips: 8
+  guard_evict_trips: 4   # every market that hit 4 trips went on to 7+
   # 2026-07-17 (M4): wind-down exit urgency. Wind-down exits rest post-only;
   # a position that stays unfilled past winddown_alert_minutes OR moves
   # against us by >= winddown_alert_move emits a loud winddown_distress event
@@ -115,10 +125,10 @@ strategy:
   winddown_escalation: none # none | cross_1tick
 
 risk:
-  max_contracts_per_market: 20
+  max_contracts_per_market: 10
   max_notional_per_market: 100 # dollars of worst-case exposure per market
   max_gross_notional: 600 # dollars across all markets
-  kill_switch_drawdown: 250 # halt at this drawdown from the ACCOUNT high-water (2026-07-17)
+  kill_switch_drawdown: 10 # ~8x worst observed drawdown; tiny bankroll protection (was 250)
   order_group_contracts_per_15s: 40 # exchange-side runaway limit (Kalshi order group)
   # 2026-07-17 (M5): on prod+live, failure to create the order group (safety
   # layer 4, the exchange-side runaway guard) ABORTS startup. Setting this
