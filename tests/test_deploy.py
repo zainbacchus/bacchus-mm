@@ -7,6 +7,7 @@ import json
 import time
 from decimal import Decimal
 from email.utils import formatdate
+from pathlib import Path
 from types import SimpleNamespace
 
 import aiohttp
@@ -285,3 +286,75 @@ async def test_check_clock_skew_network_failure_is_advisory(tmp_path):
     ex = SimpleNamespace(rest_url="http://127.0.0.1:1/trade-api/v2")
     assert await check_clock_skew(ex, events) is None
     events.close()
+
+
+# ---------------------------------------------------- 2026-07-26 config-in-image
+# The Dockerfile did not COPY config.yaml, so the container found no config file
+# and every risk parameter silently fell back to a code default — live for 8
+# days at kill switch $250 / quote_size 5 / no ticker blocklists.
+
+def test_dockerfile_copies_config_yaml():
+    """Regression: the committed config MUST ship in the image."""
+    df = (Path(__file__).resolve().parents[1] / "Dockerfile").read_text()
+    copies = [ln for ln in df.splitlines() if ln.startswith("COPY")]
+    assert any("config.yaml" in ln for ln in copies), (
+        "Dockerfile must COPY config.yaml — without it the container runs on "
+        f"code defaults. COPY lines: {copies}"
+    )
+
+
+def test_dockerignore_still_excludes_local_config():
+    """config.local.yaml stays OUT of the image (operator-only overrides)."""
+    di = (Path(__file__).resolve().parents[1] / ".dockerignore").read_text()
+    assert "config.local.yaml" in di
+
+
+def test_config_records_loaded_files(tmp_path):
+    from bacchus_mm.config import Config
+
+    # No files at all -> empty list (the silent-default failure mode).
+    assert Config.load(tmp_path).loaded_files == []
+    (tmp_path / "config.yaml").write_text("strategy:\n  quote_size: 3\n")
+    cfg = Config.load(tmp_path)
+    assert cfg.loaded_files == ["config.yaml"]
+    assert cfg.strategy.quote_size == 3
+    (tmp_path / "config.local.yaml").write_text("strategy:\n  quote_size: 2\n")
+    cfg2 = Config.load(tmp_path)
+    assert cfg2.loaded_files == ["config.yaml", "config.local.yaml"]
+    assert cfg2.strategy.quote_size == 2  # overlay wins
+
+
+@pytest.mark.asyncio
+async def test_prod_live_refuses_when_no_config_file(tmp_path, monkeypatch):
+    """Fail closed: prod + live + zero config files must not trade."""
+    from bacchus_mm.config import Config
+    from bacchus_mm.main import cmd_trade
+
+    monkeypatch.delenv("BACCHUS_ALLOW_NO_CONFIG", raising=False)
+    cfg = Config.load(tmp_path)  # no files -> loaded_files == []
+    cfg.env = "prod"
+    cfg.live_enabled = True
+    cfg.data_dir = tmp_path / "data"
+    with pytest.raises(SystemExit) as e:
+        await cmd_trade(cfg, live=True, dry_run=False)
+    assert "NO config file" in str(e.value)
+
+
+@pytest.mark.asyncio
+async def test_allow_no_config_escape_hatch_passes_the_gate(tmp_path, monkeypatch):
+    """The escape hatch clears THIS gate (it then fails later on credentials,
+    which proves it got past the config check)."""
+    from bacchus_mm.config import Config
+    from bacchus_mm.main import cmd_trade
+
+    monkeypatch.setenv("BACCHUS_ALLOW_NO_CONFIG", "1")
+    monkeypatch.delenv("KALSHI_API_KEY_ID", raising=False)
+    monkeypatch.delenv("KALSHI_PRIVATE_KEY", raising=False)
+    monkeypatch.delenv("KALSHI_PRIVATE_KEY_PATH", raising=False)
+    cfg = Config.load(tmp_path)
+    cfg.env = "prod"
+    cfg.live_enabled = True
+    cfg.data_dir = tmp_path / "data"
+    with pytest.raises(SystemExit) as e:
+        await cmd_trade(cfg, live=True, dry_run=False)
+    assert "NO config file" not in str(e.value)

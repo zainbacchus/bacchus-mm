@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import os
 import signal
 import sys
 import time
@@ -403,6 +404,21 @@ async def cmd_trade(cfg: Config, live: bool, dry_run: bool) -> None:
                 "Refusing to trade on prod: set live.enabled: true in config.local.yaml "
                 "AND pass --live. (KALSHI_ENV=demo for the demo environment.)"
             )
+        # 2026-07-26: fail closed when NO config file was found. This exact
+        # silent failure ran live for 8 days — the Dockerfile didn't copy
+        # config.yaml, so every risk parameter fell back to a code default
+        # (kill switch $250 instead of $10, quote_size 5 instead of 2, no
+        # ticker blocklists). Trading real money on unintended defaults must
+        # be loud, not silent. BACCHUS_ALLOW_NO_CONFIG=1 is the escape hatch
+        # (env, not config — config is what's missing).
+        elif not cfg.loaded_files and os.environ.get("BACCHUS_ALLOW_NO_CONFIG") != "1":
+            sys.exit(
+                "Refusing to trade on prod: NO config file was loaded, so every "
+                "risk parameter is a code default (kill switch $250, quote_size 5, "
+                "no ticker blocklists). Ship config.yaml with the app (the "
+                "Dockerfile must COPY it) or set BACCHUS_ALLOW_NO_CONFIG=1 to "
+                "explicitly accept code defaults."
+            )
 
     # Single-instance lock: two concurrent bots double exposure and fight over
     # each other's orders (observed: 44s dual-process overlap on 07-15). flock
@@ -572,6 +588,18 @@ async def cmd_trade(cfg: Config, live: bool, dry_run: bool) -> None:
             markets=tickers,
             positions=positions,
             config=cfg.raw,
+            # 2026-07-26: which config files were actually read. Empty list =
+            # running on pure code defaults (the 8-day silent mis-config).
+            config_files=cfg.loaded_files,
+            effective_params={
+                "quote_size": cfg.strategy.quote_size,
+                "max_contracts_per_market": cfg.risk.max_contracts_per_market,
+                "kill_switch_drawdown": cfg.risk.kill_switch_drawdown,
+                "min_hours_to_close": cfg.selector.min_hours_to_close,
+                "max_spread": cfg.selector.max_spread,
+                "max_markets": cfg.selector.max_markets,
+                "ticker_blocklist": cfg.selector.ticker_blocklist,
+            },
         )
         log.info(
             "session %s: env=%s dry_run=%s balance=$%s markets=%s",

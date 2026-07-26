@@ -103,16 +103,25 @@ class Config:
     health_enabled: bool = False
     health_port: int = 8080
     raw: dict = field(repr=False, default_factory=dict)
+    # 2026-07-26: names of config files actually read (empty = pure code
+    # defaults; see load()). Logged at session_start and gated in main.py.
+    loaded_files: list[str] = field(default_factory=list)
 
     @classmethod
     def load(cls, root: Path | str = ".") -> "Config":
         root = Path(root)
         data: dict[str, Any] = {}
+        # 2026-07-26: track WHICH files were actually read. An empty list means
+        # every parameter is a code default — the failure mode that ran live for
+        # 8 days because the Dockerfile never copied config.yaml into the image.
+        # main.py refuses to trade prod+live on an empty list.
+        loaded: list[str] = []
         for name in ("config.yaml", "config.local.yaml"):
             path = root / name
             if path.exists():
                 with open(path) as f:
                     data = _deep_merge(data, yaml.safe_load(f) or {})
+                loaded.append(name)
 
         sel = data.get("selector", {})
         stra = data.get("strategy", {})
@@ -216,6 +225,7 @@ class Config:
             or "HEALTH_PORT" in os.environ,
             health_port=int(os.environ.get("HEALTH_PORT", health_cfg.get("port", 8080))),
             raw=data,
+            loaded_files=loaded,
         )
 
     def credentials(self) -> Credentials:

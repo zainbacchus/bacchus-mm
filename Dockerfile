@@ -23,6 +23,15 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 # Source layer; second sync installs the bacchus-mm project itself.
 COPY src ./src
+
+# 2026-07-26 (CRITICAL FIX): the committed config MUST be in the image.
+# Without it Config.load() finds no file at /app and every parameter silently
+# falls back to the code dataclass defaults — which is what happened for the
+# first 8 live days: quote_size 5 (not 2), kill switch $250 (not $10),
+# max_contracts 20 (not 10), min_hours_to_close 12, and NO ticker blocklists,
+# so equity-linked and same-day markets got quoted. config.local.yaml stays
+# excluded (.dockerignore): container overrides belong in fly secrets/env.
+COPY config.yaml ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev
 
