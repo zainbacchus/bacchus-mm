@@ -17,10 +17,13 @@ kill_signal = "SIGINT"
 kill_timeout = 60
 
 [processes]
-  # The container CMD. Demo by default. For prod this becomes
-  # "bacchus-mm run --live" — one half of the two-key gate (the other half is
-  # the BACCHUS_LIVE_ENABLED=1 secret). See docs/deploy.md "Going live".
-  app = "bacchus-mm run --live"
+  # The container CMD — one half of the two-key gate (the other half is the
+  # BACCHUS_LIVE_ENABLED=1 secret). See docs/deploy.md "Going live".
+  # 2026-08-06 Phase D: `fifteen --live` runs the 15-minute-market measurement
+  # AND winds down legacy calm-MM positions (reduce-only workers) in the same
+  # session. To run a pure wind-down instead, set this back to
+  # "bacchus-mm run --live" (the sentinel selector config selects nothing).
+  app = "bacchus-mm fifteen --live"
 
 [env]
   KALSHI_ENV = "prod"     # flip to "prod" only when going live (docs/deploy.md)

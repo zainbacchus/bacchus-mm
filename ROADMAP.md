@@ -27,6 +27,11 @@ The capital target math: risk-free ~4%, so 2x is ~8%/yr. On $500 that is
 contracts/day, ~0.001% of series volume). Capital is not the binding
 constraint; measured net edge at OUR queue position is.
 
+Build SHIPPED 2026-08-06 (`bacchus-mm fifteen --live`; fly.toml now runs it —
+one deploy winds down legacy positions AND starts the measurement). Notable
+reality-check from the build: crypto 15M price grids are PIECEWISE (0.001
+tails / 0.01 middle, verified live), not uniform decicent as assumed below.
+
 Build (mode `fifteen`, keeps the calm-MM path intact for the record):
 
 1. Static 15M universe, no selector: all nine series (KXBTC15M, KXETH15M,

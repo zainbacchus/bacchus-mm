@@ -26,6 +26,7 @@ from .strategy.avellaneda_stoikov import (
     apply_join_best,
     compute_quotes,
 )
+from .strategy.join_touch import join_touch_quotes
 
 log = logging.getLogger(__name__)
 
@@ -77,6 +78,10 @@ class WorkerConfig:
     # lost and re-placing; otherwise a lagging order + a fresh place = the same
     # quote on the book twice, both fillable.
     create_confirm_lost_lookups: int = 3
+    # 2026-08-06 (Phase D): replace A-S pricing with the join-the-touch policy
+    # (strategy/join_touch.py) — the fifteen mode's measurement quoting. The
+    # A-S path and its join heuristic are untouched when this is False.
+    join_touch_only: bool = False
 
 
 class FastMoveGuard:
@@ -550,19 +555,56 @@ class MarketWorker:
                     return
 
         mid = top.mid
-        quotes = compute_quotes(
-            mid=mid,
-            inventory=q,
-            max_inventory=self.risk.params.max_contracts_per_market,
-            sigma=self.vol.sigma,
-            p=self.strategy,
-        )
-        if not blocked:
-            quotes = apply_join_best(
-                quotes, top.bid, top.ask,
-                min_book_spread=self.strategy.min_book_spread,
-                join_margin=self.strategy.join_margin,
+        # 2026-08-06 (Phase D): queue-position proxy, logged with the decision —
+        # resting depth of OTHERS at the level we are joining. None outside
+        # join-touch mode.
+        join_depth_bid: Optional[int] = None
+        join_depth_ask: Optional[int] = None
+        if self.cfg.join_touch_only:
+            # 2026-08-06 (Phase D): join-the-touch measurement policy. Needs
+            # full book levels to exclude our own resting order from the touch
+            # (BookTop alone can't tell "the bid" from "our bid").
+            get_levels = getattr(self.exchange, "book_levels", None)
+            levels = get_levels(self.ticker) if get_levels is not None else None
+            if levels is None:
+                return  # no book snapshot yet — wait for the stream
+            yes_bids, no_bids = levels
+            quotes = join_touch_quotes(
+                yes_bids,
+                no_bids,
+                self.bid_order.price if self.bid_order else None,
+                self.bid_order.count if self.bid_order else 0,
+                self.ask_order.price if self.ask_order else None,
+                self.ask_order.count if self.ask_order else 0,
+                inventory=q,
+                max_inventory=self.risk.params.max_contracts_per_market,
+                size=self.strategy.quote_size,
             )
+            if quotes.bid is not None:
+                mine = self.bid_order.count if (
+                    self.bid_order and self.bid_order.price == quotes.bid
+                ) else 0
+                join_depth_bid = max(int(yes_bids.get(quotes.bid, 0)) - mine, 0)
+            if quotes.ask is not None:
+                no_level = Decimal(1) - quotes.ask
+                mine = self.ask_order.count if (
+                    self.ask_order and self.ask_order.price == quotes.ask
+                ) else 0
+                join_depth_ask = max(int(no_bids.get(no_level, 0)) - mine, 0)
+        else:
+            quotes = compute_quotes(
+                mid=mid,
+                inventory=q,
+                max_inventory=self.risk.params.max_contracts_per_market,
+                sigma=self.vol.sigma,
+                p=self.strategy,
+            )
+            if not blocked:
+                quotes = apply_join_best(
+                    quotes, top.bid, top.ask,
+                    min_book_spread=self.strategy.min_book_spread,
+                    join_margin=self.strategy.join_margin,
+                )
         if self.reduce_only or blocked:
             # Exit-only quoting: suppress the side that would grow |position|,
             # cap the exit size at the position so we never flip through flat.
@@ -624,6 +666,8 @@ class MarketWorker:
             ask_size=quotes.ask_size,
             joined_bid=quotes.joined_bid,
             joined_ask=quotes.joined_ask,
+            join_depth_bid=join_depth_bid,
+            join_depth_ask=join_depth_ask,
             dry_run=self.dry_run,
         )
         self.bid_order = await self._reconcile(

@@ -198,6 +198,43 @@ Implemented from REVIEW-2026-07-17.md §4 P1 table. 172 tests passing. Branch
   `KALSHI_PRIVATE_KEY` inline PEM already supported. Startup clock-skew check
   warns >2s vs the REST Date header (RSA-PSS auth is local-ms).
 
+## 2026-08-06 Phase D: fifteen mode (the active strategy — read before touching fifteen.py / join_touch.py)
+
+`bacchus-mm fifteen --live` measures join-the-touch quoting on the 15-minute
+markets (ROADMAP Phase D). The calm-MM `run` path is retired but intact
+(config.yaml selector holds a sentinel category; `run --live` is a pure
+wind-down session — zero picks + held positions is valid, main.py no longer
+exits on it).
+
+- **No model, deliberately.** The market's mid beat a spot-driven model at
+  every minute of window life (research/ARB-AND-15MIN-STUDY-2026-08-06.md),
+  so fifteen workers JOIN the external touch and never price. The policy
+  (strategy/join_touch.py) computes the touch EXCLUDING our own resting
+  order — joining the raw book top would chase our own quote down one tick
+  per cycle. Never leads, never crosses; crossed/locked external book quotes
+  nothing.
+- **Fast-move guard is OFF in this mode** (threshold parked at $9). That is a
+  measurement decision, not an oversight: risk is bounded by quote_size x
+  max_contracts_per_market x $1 per series + the account kill switch.
+- **T-75s pull:** pull_loop sets close_reaped at close-75s (the final 60s is
+  the settlement AVERAGING window — resting quotes there are free options).
+  Window positions ride to settlement (defined risk); there is NO reduce-only
+  wind-down for windows. Legacy calm-MM positions DO get wind-down workers.
+- **Price grids are piecewise** (verified live 2026-08-06): crypto 15M uses
+  0.001 ticks in [0,0.10] and [0.90,1.00], 0.01 in the middle; Gold/Silver
+  uniform 0.01. parse_window accepts any contiguous cover of [0,1] with steps
+  in [min_tick, max_tick] and REFUSES anything else
+  (fifteen_structure_refused). Join-touch is grid-safe by construction — it
+  only quotes at prices already resting in the book.
+- **Measurement telemetry:** quote_decision carries join_depth_bid/ask
+  (others' resting depth at the joined level — the queue-position proxy);
+  fifteen_window_start / fifteen_quotes_pulled / fifteen_structure_refused
+  bracket each window. Fill rate = fills vs windows quoted; conditional edge
+  = fill price vs settlement (settlement_realized), both per series.
+- **Go/no-go per series** after ~1 week: measured net c/contract > 0 with CI
+  excluding zero -> scale THAT series (scaling is its own experiment — our
+  size moves our queue position); else drop the series.
+
 ## Conventions
 
 - Prices: Decimal dollars in [0,1] on the YES side. Positions: signed

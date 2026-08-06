@@ -221,6 +221,11 @@ class KalshiExchange(ExchangeAdapter):
         # 2026-07-17 (M7): used to estimate a fill's fee when the ws payload
         # doesn't carry the exchange's own fee_cost.
         self.fee_schedule = fee_schedule
+        # 2026-08-06 (Phase D): the stream's live OrderBook instances, exposed
+        # read-only via book_levels() so the join-touch policy can compute the
+        # touch EXCLUDING our own resting order (joining our own quote would
+        # walk the book down one tick per requote).
+        self._books: dict[str, OrderBook] = {}
         # 2026-07-17 (C1): the exchange-global trading_paused_until backoff is
         # gone — per-market suspension (worker) + sweep cooloff (QuotingGate)
         # replaced it; see marketmaker.py.
@@ -312,6 +317,36 @@ class KalshiExchange(ExchangeAdapter):
             cursor = data.get("cursor")
             if not cursor:
                 break
+        return out
+
+    def book_levels(
+        self, ticker: str
+    ) -> Optional[tuple[dict[Decimal, Decimal], dict[Decimal, Decimal]]]:
+        """(yes_bids, no_bids) of the live local book, or None before the first
+        snapshot. Same-event-loop read of the stream's OrderBook — callers must
+        not mutate. Yes-side asks are no-bids at 1-p (2026-08-06, Phase D)."""
+        b = self._books.get(ticker)
+        if b is None or (not b.yes_bids and not b.no_bids):
+            return None
+        return b.yes_bids, b.no_bids
+
+    async def get_series_open_markets(self, series_ticker: str) -> list[dict]:
+        """Raw open-market payloads for one series (2026-08-06, Phase D
+        window discovery). Returns the nested market dicts with open_time,
+        close_time, and price_ranges intact — the fifteen roll loop needs the
+        exact structure (tick step) and refuses to quote what it can't parse."""
+        params = {
+            "series_ticker": series_ticker,
+            "status": "open",
+            "with_nested_markets": "true",
+            "limit": 200,
+        }
+        data = await self._request("GET", "/events", params=params, authed=False)
+        out: list[dict] = []
+        for ev in data.get("events", []):
+            for m in ev.get("markets") or []:
+                if m.get("status") in ("active", "open"):
+                    out.append(m)
         return out
 
     async def get_24h_mid_range(self, series_ticker: str, ticker: str) -> Optional[Decimal]:
@@ -532,6 +567,8 @@ class KalshiExchange(ExchangeAdapter):
         while True:
             tickers = get_tickers()
             books: dict[str, OrderBook] = {t: OrderBook(t) for t in tickers}
+            # 2026-08-06 (Phase D): expose the live books for book_levels().
+            self._books = books
             try:
                 session = await self._http()
                 headers = self.auth.headers("GET", "/trade-api/ws/v2")

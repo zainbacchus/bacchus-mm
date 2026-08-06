@@ -128,8 +128,13 @@ config-file half becomes an env var:
    fly secrets set KALSHI_API_KEY_ID=prod-key-id
    fly secrets set KALSHI_PRIVATE_KEY="$(cat /path/to/kalshi-prod-private-key.pem)"
    ```
-2. Edit `fly.toml`: `[env] KALSHI_ENV = "prod"`, and
-   `[processes] app = "bacchus-mm run --live"`.
+2. Edit `fly.toml`: `[env] KALSHI_ENV = "prod"`, and the process command.
+   Since 2026-08-06 (Phase D) the committed command is
+   `app = "bacchus-mm fifteen --live"` — the 15-minute-market measurement,
+   which ALSO winds down any legacy calm-MM positions (reduce-only workers)
+   in the same session. `app = "bacchus-mm run --live"` is the retired
+   calm-MM path; with the current sentinel selector config it runs as a pure
+   wind-down session (selects nothing, exits held positions).
 3. Set the config half of the gate:
    ```bash
    fly secrets set BACCHUS_LIVE_ENABLED=1

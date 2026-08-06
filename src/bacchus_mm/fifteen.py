@@ -1,0 +1,608 @@
+"""Phase D orchestrator: measurement quoting on the 15-minute markets.
+
+`bacchus-mm fifteen --live` runs join-the-touch quoting (1 lot per side by
+default) on every series in fifteen.series, rolling to each new 15-minute
+window as it opens. There is NO selector, NO Avellaneda-Stoikov pricing, and
+NO fast-move guard here — the point is to measure what passive queue
+membership at the touch actually earns (fill rate, conditional edge vs
+settlement), which research/ARB-AND-15MIN-STUDY-2026-08-06.md could not
+simulate. Deliberate consequences of that goal:
+
+  * The guard is disabled (threshold parked at $9). These books reprice
+    constantly; a guard would change the measured policy. Risk is bounded by
+    quote_size x max_contracts_per_market x $1 per series instead.
+  * Quotes are pulled at close - pull_seconds_before_close (default 75s): the
+    last 60s IS the settlement averaging window — a resting quote there gives
+    a free option on a number that is being fixed while price still moves.
+  * Fills ride to settlement (defined risk <= $1/contract); the settlement
+    poll realizes them. No wind-down quoting for window positions.
+
+Legacy positions from the calm-MM era still get reduce-only wind-down workers
+(A-S path, join_touch_only=False), so one deployment both winds down the old
+book and runs the measurement.
+
+Window discovery polls /events per series and refuses any market whose price
+structure it cannot parse (fifteen_structure_refused) — quoting an unknown
+tick grid with real money is how you buy something you did not price.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+import signal
+import sys
+import time
+import uuid
+from dataclasses import dataclass, field, replace as dc_replace
+from datetime import datetime
+from decimal import Decimal
+from typing import Optional
+
+from .config import Config
+from .eventlog import EventLog
+from .exchange.kalshi import KalshiExchange
+from .health import HealthState, start_health_server
+from .marketmaker import MarketWorker, QuotingGate, WorkerConfig
+from .reconcile import managed_tickers, reconcile_loop
+
+log = logging.getLogger(__name__)
+
+DEFAULT_SERIES = [
+    "KXBTC15M", "KXETH15M", "KXSOL15M", "KXDOGE15M", "KXBNB15M",
+    "KXHYPE15M", "KXNEAR15M", "KXGOLD15M", "KXSILVER15M",
+]
+
+
+@dataclass
+class FifteenParams:
+    series: list[str] = field(default_factory=lambda: list(DEFAULT_SERIES))
+    quote_size: int = 1
+    max_contracts_per_market: int = 5
+    # Cancel everything this many seconds before close; the final 60s is the
+    # settlement averaging window (see module docstring).
+    pull_seconds_before_close: float = 75.0
+    # Don't join a window in its first seconds — the book is still forming.
+    min_seconds_after_open: float = 5.0
+    discovery_poll_seconds: float = 10.0
+    requote_min_interval: float = 1.0
+    # Two decicent ticks of slack before chasing the touch — every requote is
+    # a cancel+create (12 write tokens) and forfeits queue position.
+    requote_tolerance: Decimal = Decimal("0.002")
+    order_ttl_seconds: int = 60
+    settlement_poll_seconds: float = 300.0
+    # Accept a window only if its price grid is a single uniform step inside
+    # this band. Anything else is a structure we did not study.
+    min_tick: Decimal = Decimal("0.0001")
+    max_tick: Decimal = Decimal("0.01")
+    # A "15 minute" market whose open->close span is outside this band is not
+    # the product we studied (e.g. a mislabeled daily).
+    min_window_seconds: float = 60.0
+    max_window_seconds: float = 3600.0
+
+    @classmethod
+    def from_config(cls, raw: dict) -> "FifteenParams":
+        f = raw.get("fifteen", {}) or {}
+        d = cls()
+        return cls(
+            series=list(f.get("series", d.series)),
+            quote_size=int(f.get("quote_size", d.quote_size)),
+            max_contracts_per_market=int(
+                f.get("max_contracts_per_market", d.max_contracts_per_market)
+            ),
+            pull_seconds_before_close=float(
+                f.get("pull_seconds_before_close", d.pull_seconds_before_close)
+            ),
+            min_seconds_after_open=float(
+                f.get("min_seconds_after_open", d.min_seconds_after_open)
+            ),
+            discovery_poll_seconds=float(
+                f.get("discovery_poll_seconds", d.discovery_poll_seconds)
+            ),
+            requote_min_interval=float(
+                f.get("requote_min_interval", d.requote_min_interval)
+            ),
+            requote_tolerance=Decimal(str(f.get("requote_tolerance", d.requote_tolerance))),
+            order_ttl_seconds=int(f.get("order_ttl_seconds", d.order_ttl_seconds)),
+            settlement_poll_seconds=float(
+                f.get("settlement_poll_seconds", d.settlement_poll_seconds)
+            ),
+            min_tick=Decimal(str(f.get("min_tick", d.min_tick))),
+            max_tick=Decimal(str(f.get("max_tick", d.max_tick))),
+            min_window_seconds=float(f.get("min_window_seconds", d.min_window_seconds)),
+            max_window_seconds=float(f.get("max_window_seconds", d.max_window_seconds)),
+        )
+
+
+def _ts(iso: Optional[str]) -> Optional[float]:
+    if not iso:
+        return None
+    try:
+        return datetime.fromisoformat(iso.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def parse_window(m: dict, p: FifteenParams, now: Optional[float] = None):
+    """Validate one raw market payload as a quotable 15-minute window.
+
+    Returns (ticker, open_ts, close_ts, finest_tick) or (None, reason) — the
+    caller refuses to quote anything this function cannot fully parse.
+
+    Price grids: verified live 2026-08-06, the crypto 15M series use a
+    PIECEWISE grid — 0.001 steps in the tails ([0,0.10] and [0.90,1.00]) and
+    0.01 in the middle — while Gold/Silver are uniform 0.01. We accept any
+    sorted, contiguous, gap-free cover of [0,1] whose every step is inside
+    [min_tick, max_tick]. The join-touch policy is grid-safe by construction
+    (it only quotes at prices ALREADY resting in the book), so the tick is
+    returned for logging/strategy metadata, not price generation.
+    """
+    now = now if now is not None else time.time()
+    ticker = m.get("ticker")
+    if not ticker:
+        return None, "no_ticker"
+    open_ts, close_ts = _ts(m.get("open_time")), _ts(m.get("close_time"))
+    if open_ts is None or close_ts is None:
+        return None, "unparseable_times"
+    span = close_ts - open_ts
+    if not (p.min_window_seconds <= span <= p.max_window_seconds):
+        return None, f"window_span_{int(span)}s"
+    parsed_ranges: list[tuple[Decimal, Decimal, Decimal]] = []
+    for r in m.get("price_ranges") or []:
+        try:
+            parsed_ranges.append(
+                (Decimal(str(r.get("start"))), Decimal(str(r.get("end"))),
+                 Decimal(str(r.get("step"))))
+            )
+        except (TypeError, ValueError, ArithmeticError):
+            return None, "unparseable_price_ranges"
+    if not parsed_ranges:
+        return None, "no_price_ranges"
+    parsed_ranges.sort(key=lambda r: r[0])
+    if parsed_ranges[0][0] != 0 or parsed_ranges[-1][1] != 1:
+        return None, "ranges_do_not_cover_0_1"
+    prev_end = parsed_ranges[0][0]
+    for start, end, step in parsed_ranges:
+        if start != prev_end or end <= start:
+            return None, "ranges_gap_or_overlap"
+        if not (p.min_tick <= step <= p.max_tick):
+            return None, f"tick_out_of_band_{step}"
+        prev_end = end
+    finest = min(step for _, _, step in parsed_ranges)
+    return (ticker, open_ts, close_ts, finest), None
+
+
+async def run_fifteen(cfg: Config, live: bool, dry_run: bool) -> None:
+    # Late import: main.py imports this module lazily from cli(), and we reuse
+    # its session plumbing — module-level cross-imports would be circular.
+    from .main import (
+        FillDispatcher,
+        check_clock_skew,
+        load_chained_risk,
+        marks_tick,
+        persist_pnl_marks,
+        require_order_group,
+        settlement_poll,
+        supervise,
+        _build_exchange,
+    )
+
+    p = FifteenParams.from_config(cfg.raw)
+
+    if cfg.env == "prod":
+        if dry_run:
+            pass
+        elif not (cfg.live_enabled and live):
+            sys.exit(
+                "Refusing to trade on prod: set live.enabled: true (or "
+                "BACCHUS_LIVE_ENABLED=1) AND pass --live."
+            )
+        elif not cfg.loaded_files and os.environ.get("BACCHUS_ALLOW_NO_CONFIG") != "1":
+            sys.exit(
+                "Refusing to trade on prod: NO config file was loaded (the 8-day "
+                "silent mis-config). Ship config.yaml or set BACCHUS_ALLOW_NO_CONFIG=1."
+            )
+
+    import fcntl
+
+    cfg.data_dir.mkdir(parents=True, exist_ok=True)
+    lock_handle = open(cfg.data_dir / "bot.lock", "w")
+    try:
+        fcntl.flock(lock_handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        sys.exit("Another bacchus-mm instance is already running (data/bot.lock is held).")
+
+    ex: KalshiExchange = _build_exchange(cfg, need_auth=True)
+    session_id = f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
+    events = EventLog(
+        cfg.data_dir, session_id,
+        flush_seconds=cfg.log_flush_seconds,
+        flush_batch=cfg.log_flush_batch,
+        events_keep_days=cfg.log_events_keep_days,
+    )
+    # Fifteen inventory cap replaces the calm-mode cap; everything else in
+    # risk (notional caps, kill switch) comes from config unchanged.
+    risk_params = dc_replace(cfg.risk, max_contracts_per_market=p.max_contracts_per_market)
+    risk = load_chained_risk(risk_params, cfg.data_dir, events)
+
+    await check_clock_skew(ex, events)
+
+    prior_halt = risk.check_halt_file()
+    if prior_halt and not dry_run:
+        sys.exit(
+            f"HALTED marker present from a previous kill-switch trip:\n  {prior_halt}\n"
+            "Review data/ logs, then run `bacchus-mm halt-clear` to re-arm."
+        )
+
+    stop_event = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, stop_event.set)
+
+    workers: dict[str, MarketWorker] = {}
+    window_close: dict[str, float] = {}  # ticker -> close epoch (window workers only)
+    close_times: dict[str, str] = {}  # ISO strings for the settlement poll
+    tasks: list[asyncio.Task] = []
+
+    health_state = HealthState(
+        mode="fifteen" if not dry_run else "fifteen-observe",
+        live=live, risk=risk, workers=workers,
+    )
+    events.on_event = health_state.note_event
+    health_runner = None
+
+    try:
+        if cfg.health_enabled:
+            try:
+                health_runner = await start_health_server(health_state, cfg.health_port)
+                log.info("health endpoint listening on :%d/health", cfg.health_port)
+            except OSError:
+                log.exception("health endpoint failed to bind port %d", cfg.health_port)
+
+        balance = await ex.get_balance()
+        positions = await ex.get_positions()
+
+        def _last_logged_mid(ticker: str):
+            row = events.db.execute(
+                "SELECT mid FROM mids WHERE ticker=? ORDER BY ts_ms DESC LIMIT 1", (ticker,)
+            ).fetchone()
+            return Decimal(str(row[0])) if row else None
+
+        # Seed every held position (all "orphans" here — fifteen selects no
+        # standing markets); skip already-realized ones exactly like cmd_trade.
+        already_settled = events.settled_tickers()
+        for t, pos in positions.items():
+            if pos and t not in already_settled:
+                risk.seed_position(t, pos, _last_logged_mid(t))
+
+        if not dry_run:
+            gid = await ex.ensure_order_group(cfg.order_group_contracts_per_15s)
+            require_order_group(cfg, live, gid, events)
+            stale = await ex.cancel_all_orders(tickers=managed_tickers(risk=risk, selected=[]))
+            if stale:
+                log.info("canceled %d stale resting orders from a previous session", stale)
+
+        events.emit(
+            "session_start",
+            env=cfg.env,
+            dry_run=dry_run,
+            mode="fifteen",
+            balance=balance,
+            markets=[],
+            positions=positions,
+            config=cfg.raw,
+            config_files=cfg.loaded_files,
+            effective_params={
+                "series": p.series,
+                "quote_size": p.quote_size,
+                "max_contracts_per_market": p.max_contracts_per_market,
+                "pull_seconds_before_close": p.pull_seconds_before_close,
+                "requote_tolerance": p.requote_tolerance,
+                "order_ttl_seconds": p.order_ttl_seconds,
+                "kill_switch_drawdown": risk_params.kill_switch_drawdown,
+            },
+        )
+        log.info(
+            "fifteen session %s: env=%s dry_run=%s balance=$%s series=%s",
+            session_id, cfg.env, dry_run, balance, ",".join(p.series),
+        )
+
+        # Window workers: join-touch policy, guard disabled (measurement mode
+        # — see module docstring), dense mid marks for 15-minute lifetimes.
+        wcfg_window = WorkerConfig(
+            requote_min_interval=p.requote_min_interval,
+            requote_tolerance=p.requote_tolerance,
+            order_ttl_seconds=p.order_ttl_seconds,
+            mid_mark_interval=5.0,
+            fast_move_threshold=Decimal("9"),
+            guard_evict_trips=10_000,
+            join_touch_only=True,
+        )
+        # Legacy wind-down workers: standard calm-mode config (A-S exit path).
+        wcfg_legacy = WorkerConfig(
+            requote_min_interval=cfg.requote_min_interval,
+            requote_tolerance=cfg.requote_tolerance,
+            order_ttl_seconds=cfg.order_ttl_seconds,
+            fast_move_threshold=cfg.fast_move_threshold,
+            fast_move_window=cfg.fast_move_window,
+            fast_move_cooloff=cfg.fast_move_cooloff,
+            fast_move_spread_multiple=cfg.fast_move_spread_multiple,
+            fast_move_confirm_updates=cfg.fast_move_confirm_updates,
+            guard_evict_trips=cfg.guard_evict_trips,
+            winddown_alert_seconds=cfg.winddown_alert_minutes * 60,
+            winddown_alert_move=cfg.winddown_alert_move,
+            winddown_escalation=cfg.winddown_escalation,
+        )
+        strategy_window = dc_replace(
+            cfg.strategy, quote_size=p.quote_size, tick=Decimal("0.001")
+        )
+        gate = QuotingGate()
+
+        for t, pos in positions.items():
+            if pos != 0 and t not in already_settled:
+                workers[t] = MarketWorker(
+                    t, ex, cfg.strategy, risk, events, wcfg_legacy,
+                    dry_run=dry_run, reduce_only=True, gate=gate,
+                )
+                events.emit("wind_down_started", ticker=t, position=pos)
+                log.info("wind-down worker started for legacy position %s (%+d)", t, pos)
+
+        _orphan_mark: dict[str, float] = {}
+
+        def on_book_top(top):
+            w = workers.get(top.ticker)
+            if w:
+                w.on_book_top(top)
+            elif top.mid is not None:
+                risk.on_mid(top.ticker, top.mid)
+                if time.monotonic() - _orphan_mark.get(top.ticker, 0) >= 60:
+                    events.record_mid(top.ticker, top.mid, top.bid, top.ask)
+                    _orphan_mark[top.ticker] = time.monotonic()
+
+        on_fill = FillDispatcher(workers, risk, events)
+
+        def active_tickers() -> list[str]:
+            out = set()
+            for t, w in workers.items():
+                if not w.evicted:
+                    out.add(t)
+            for t, st in risk.markets.items():
+                if st.position:
+                    out.add(t)
+            return sorted(out)
+
+        async def consume_stream():
+            async for _ in ex.stream(active_tickers, on_book_top, on_fill):
+                pass
+
+        def _spawn(coro, name: str) -> None:
+            t = asyncio.create_task(coro, name=name)
+            supervise(t, name, stop_event, events)
+            tasks.append(t)
+
+        refused: set[str] = set()
+
+        async def discovery_loop():
+            """Poll each series for its open window; spawn a worker per window."""
+            while not stop_event.is_set():
+                new_windows = 0
+                for s in p.series:
+                    try:
+                        mkts = await ex.get_series_open_markets(s)
+                    except Exception as e:  # noqa: BLE001 — one series must not stall the rest
+                        log.warning("discovery failed for %s: %s", s, e)
+                        continue
+                    now = time.time()
+                    for m in mkts:
+                        parsed, reason = parse_window(m, p, now)
+                        if parsed is None:
+                            tk = m.get("ticker") or f"{s}-?"
+                            if tk not in refused:
+                                refused.add(tk)
+                                events.emit(
+                                    "fifteen_structure_refused",
+                                    ticker=tk, series=s, reason=reason,
+                                )
+                                log.warning("refusing window %s: %s", tk, reason)
+                            continue
+                        tkr, open_ts, close_ts, tick = parsed
+                        if tkr in workers or tkr in already_settled:
+                            continue
+                        if now < open_ts + p.min_seconds_after_open:
+                            continue  # book still forming; next poll gets it
+                        if now >= close_ts - p.pull_seconds_before_close:
+                            continue  # too late in the window to join
+                        w = MarketWorker(
+                            tkr, ex, dc_replace(strategy_window, tick=tick),
+                            risk, events, wcfg_window, dry_run=dry_run, gate=gate,
+                        )
+                        workers[tkr] = w
+                        window_close[tkr] = close_ts
+                        close_times[tkr] = m.get("close_time", "")
+                        risk.seed_position(tkr, positions.get(tkr, 0), None)
+                        _spawn(w.run(), f"window:{tkr}")
+                        events.emit(
+                            "fifteen_window_start",
+                            ticker=tkr, series=s, tick=tick,
+                            open_time=m.get("open_time"), close_time=m.get("close_time"),
+                            seconds_to_close=round(close_ts - now, 1),
+                        )
+                        log.info(
+                            "window %s: quoting joins for %.0fs (tick %s)",
+                            tkr, close_ts - now - p.pull_seconds_before_close, tick,
+                        )
+                        new_windows += 1
+                if new_windows:
+                    ex.request_resubscribe()
+                await asyncio.sleep(p.discovery_poll_seconds)
+
+        # Windows past close, awaiting flat + a grace period before removal —
+        # 9 series x ~96 windows/day would otherwise grow `workers` (and its
+        # idle run() tasks) without bound.
+        awaiting_cleanup: dict[str, float] = {}
+
+        async def pull_loop():
+            """Second-granularity close handling: pull quotes at T-pull, retire
+            the worker at close, remove it once flat. Positions ride to
+            settlement by design."""
+            while not stop_event.is_set():
+                now = time.time()
+                for tkr, close_ts in list(window_close.items()):
+                    w = workers.get(tkr)
+                    if w is None:
+                        window_close.pop(tkr, None)
+                        continue
+                    if now >= close_ts - p.pull_seconds_before_close and not w.close_reaped:
+                        w.close_reaped = True
+                        w.wake()
+                        st = risk.markets.get(tkr)
+                        events.emit(
+                            "fifteen_quotes_pulled",
+                            ticker=tkr,
+                            seconds_to_close=round(close_ts - now, 1),
+                            position=st.position if st else 0,
+                        )
+                    if now >= close_ts and not w.evicted:
+                        w.evicted = True  # drops from the stream once flat
+                        w.wake()
+                        window_close.pop(tkr, None)
+                        awaiting_cleanup[tkr] = close_ts
+                # Remove dead windows: flat (settled or never filled) and past
+                # close by a grace period. A window still holding a position
+                # stays until the settlement poll realizes it (position -> 0).
+                for tkr, close_ts in list(awaiting_cleanup.items()):
+                    st = risk.markets.get(tkr)
+                    if st is not None and st.position != 0:
+                        continue
+                    if now < close_ts + 300:
+                        continue
+                    awaiting_cleanup.pop(tkr, None)
+                    # Freeze the risk entry: a flat, closed window has nothing
+                    # to settle, and without this marks_tick would write a mid
+                    # row per minute for every window ever quoted (~864/day).
+                    # cash stays in the MarketState, so realized PnL is intact.
+                    if st is not None and not st.settled:
+                        st.settled = True
+                    w = workers.pop(tkr, None)
+                    if w is not None:
+                        try:
+                            await w.stop()  # ends the run() task; orders already gone
+                        except Exception:  # noqa: BLE001
+                            log.exception("window cleanup stop failed for %s", tkr)
+                    close_times.pop(tkr, None)
+                await asyncio.sleep(1.0)
+
+        async def risk_loop():
+            last_kv_persist = time.monotonic()
+            while not stop_event.is_set():
+                await asyncio.sleep(5)
+                health_state.note_event()
+                pnl = risk.cumulative_pnl
+                dd = risk.drawdown()
+                events.record_pnl(pnl, risk.high_water, dd, risk.gross_contracts())
+                if not dry_run and (
+                    risk.new_high_water_since_load
+                    or time.monotonic() - last_kv_persist >= 60
+                ):
+                    persist_pnl_marks(events, risk)
+                    last_kv_persist = time.monotonic()
+                reason = risk.should_halt()
+                if reason and not risk.halted and not dry_run:
+                    risk.halt(reason)
+                    events.emit("halt", reason=reason, pnl=pnl, drawdown=dd)
+                    log.error("KILL SWITCH: %s", reason)
+                    try:
+                        n = await ex.cancel_all_orders(tickers=managed_tickers(workers, risk))
+                        log.error("kill switch canceled %d resting orders; bot is halted", n)
+                    except Exception:  # noqa: BLE001
+                        log.exception("cancel-all during halt failed — CHECK THE EXCHANGE UI")
+                    stop_event.set()
+
+        async def eventlog_flush_loop():
+            while not stop_event.is_set():
+                await asyncio.sleep(cfg.log_flush_seconds)
+                try:
+                    events.flush()
+                except Exception:  # noqa: BLE001
+                    log.exception("eventlog flush failed")
+
+        async def marks_loop():
+            # marks only — no close reaper here; pull_loop owns close handling
+            # at seconds granularity.
+            while not stop_event.is_set():
+                await asyncio.sleep(cfg.marks_tick_seconds)
+                try:
+                    marks_tick(workers, risk, events, cfg.marks_tick_seconds)
+                except Exception:  # noqa: BLE001
+                    log.exception("marks tick failed")
+
+        async def settlement_poll_loop():
+            while not stop_event.is_set():
+                await asyncio.sleep(p.settlement_poll_seconds)
+                try:
+                    await settlement_poll(ex, risk, events, close_times, workers)
+                except Exception:  # noqa: BLE001
+                    log.exception("settlement poll failed")
+
+        _spawn(consume_stream(), "stream")
+        _spawn(discovery_loop(), "discovery")
+        _spawn(pull_loop(), "pull_loop")
+        _spawn(risk_loop(), "risk_loop")
+        _spawn(eventlog_flush_loop(), "eventlog_flush")
+        _spawn(marks_loop(), "marks_loop")
+        if not dry_run:
+            _spawn(settlement_poll_loop(), "settlement_poll")
+            _spawn(
+                reconcile_loop(
+                    ex, workers, risk, events, gate, stop_event,
+                    cfg.reconcile_seconds, cfg.sweep_cooloff_seconds,
+                    ttl_seconds=p.order_ttl_seconds,
+                ),
+                "reconcile",
+            )
+        for t in list(workers):  # legacy wind-down workers created above
+            _spawn(workers[t].run(), f"worker:{t}")
+
+        await stop_event.wait()
+        log.info("shutting down…")
+    finally:
+        for w in workers.values():
+            try:
+                await w.stop()
+            except Exception:  # noqa: BLE001
+                log.exception("worker stop failed")
+        for t in tasks:
+            t.cancel()
+        if not dry_run:
+            try:
+                managed = managed_tickers(workers, risk)
+                remaining = await ex.cancel_all_orders(tickers=managed)
+                managed_set = set(managed)
+                resting = [
+                    o for o in await ex.get_resting_orders() if o.ticker in managed_set
+                ]
+                events.emit("session_stop", canceled=remaining, still_resting=len(resting))
+                if resting:
+                    log.error(
+                        "%d orders STILL RESTING on managed tickers after shutdown "
+                        "— check the exchange UI", len(resting)
+                    )
+                else:
+                    log.info("shutdown clean: no resting orders on managed tickers")
+            except Exception:  # noqa: BLE001
+                log.exception("shutdown cancel-all failed — CHECK THE EXCHANGE UI")
+        else:
+            events.emit("session_stop", canceled=0, still_resting=0)
+        if not dry_run:
+            try:
+                persist_pnl_marks(events, risk)
+            except Exception:  # noqa: BLE001
+                log.exception("failed to persist cumulative pnl on shutdown")
+        events.close()
+        if health_runner is not None:
+            try:
+                await health_runner.cleanup()
+            except Exception:  # noqa: BLE001
+                log.exception("health server cleanup failed")
+        await ex.close()

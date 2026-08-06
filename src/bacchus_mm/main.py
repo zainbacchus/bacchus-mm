@@ -528,12 +528,24 @@ async def cmd_trade(cfg: Config, live: bool, dry_run: bool) -> None:
 
         picks = all_picks[: cfg.selector.max_markets]
         standby = [s.market for s in all_picks[cfg.selector.max_markets :]]
-        if not picks:
-            sys.exit("Selector found no eligible markets; try `bacchus-mm markets` and loosen filters.")
         tickers = [s.market.ticker for s in picks]
 
         balance = await ex.get_balance()
         positions = await ex.get_positions()
+        # 2026-08-06: zero picks is a valid WIND-DOWN session when positions
+        # are still held (the sentinel-category config selects nothing on
+        # purpose) — exiting here would strand the inventory unmanaged. Only
+        # an empty book AND an empty selection means there is nothing to do.
+        if not picks and not any(positions.values()):
+            sys.exit(
+                "Selector found no eligible markets and no positions are held; "
+                "try `bacchus-mm markets` and loosen filters."
+            )
+        if not picks:
+            log.warning(
+                "selector matched nothing — wind-down-only session for %d held positions",
+                sum(1 for v in positions.values() if v),
+            )
 
         def _last_logged_mid(ticker: str):
             # Round 2 (adversarial): seed held positions at the PRIOR session's
@@ -1059,6 +1071,10 @@ def cli() -> None:
     sub.add_parser("observe", help="stream + log selected markets, place no orders")
     run_p = sub.add_parser("run", help="trade")
     run_p.add_argument("--live", action="store_true", help="required (with live.enabled) for prod")
+    # 2026-08-06 (Phase D): join-touch measurement on the 15-minute markets.
+    fif = sub.add_parser("fifteen", help="quote the 15-minute markets (join-touch measurement)")
+    fif.add_argument("--live", action="store_true", help="required (with live.enabled) for prod")
+    fif.add_argument("--observe", action="store_true", help="log decisions, place no orders")
     sub.add_parser("cancel-all", help="cancel all resting orders")
     sub.add_parser("equity", help="true mark-to-market: cash + positions at latest mids")
     sub.add_parser("halt-clear", help="acknowledge a kill-switch halt")
@@ -1087,6 +1103,10 @@ def cli() -> None:
         asyncio.run(cmd_trade(cfg, live=False, dry_run=True))
     elif args.command == "run":
         asyncio.run(cmd_trade(cfg, live=args.live, dry_run=False))
+    elif args.command == "fifteen":
+        from .fifteen import run_fifteen
+
+        asyncio.run(run_fifteen(cfg, live=args.live, dry_run=args.observe))
     elif args.command == "crossvenue":
         asyncio.run(cmd_crossvenue(cfg))
     elif args.command == "pm-find":

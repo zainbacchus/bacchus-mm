@@ -8,6 +8,29 @@ live:
   # Both this AND the --live CLI flag are required to place orders on prod.
   enabled: false
 
+# 2026-08-06 Phase D (ROADMAP): join-the-touch measurement on the 15-minute
+# markets — `bacchus-mm fifteen --live`. No selector, no A-S pricing, no
+# fast-move guard; risk is bounded by quote_size x max_contracts_per_market
+# x $1 per series plus the account-level kill switch above. The measurement
+# (real fill rate + conditional edge vs settlement) is the product.
+fifteen:
+  series:
+    - KXBTC15M
+    - KXETH15M
+    - KXSOL15M
+    - KXDOGE15M
+    - KXBNB15M
+    - KXHYPE15M
+    - KXNEAR15M
+    - KXGOLD15M
+    - KXSILVER15M
+  quote_size: 1 # measurement size; scaling is a NEW experiment (own size moves the queue)
+  max_contracts_per_market: 5
+  pull_seconds_before_close: 75 # last 60s is the settlement averaging window
+  requote_tolerance: 0.002 # decicent books: chase the touch only when >= 2 ticks away
+  order_ttl_seconds: 60
+  settlement_poll_seconds: 300 # windows settle ~30min after close; recycle capital promptly
+
 exchange:
   # Kalshi Basic tier allows 100 write tokens/s (order=10, cancel=2).
   # We self-limit well below that.
