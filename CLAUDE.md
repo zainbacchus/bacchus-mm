@@ -234,6 +234,25 @@ exits on it).
 - **Go/no-go per series** after ~1 week: measured net c/contract > 0 with CI
   excluding zero -> scale THAT series (scaling is its own experiment — our
   size moves our queue position); else drop the series.
+- **Evidence levers (2026-08-06, owner: "apply all 4")** — each independently
+  disable-able in config.yaml `fifteen:` and each emits its own attribution
+  telemetry; score them SEPARATELY at every review:
+  - M1 tilt (`tilt_tail_threshold`, join_touch.py): never sell the favorite /
+    buy the longshot in the tails. Evidence: research/CALIBRATION-15M
+    -2026-08-06.md (+0.57c/ct at 0.98-1.00 late, n=2005, ~4σ) + Buergi-Deng-
+    Whelan 2026. Telemetry: quote_decision.tilt_bid/tilt_ask.
+  - M2 toxicity pull: the fast-move guard re-enabled at 15M scale (threshold
+    0.03/10s window/45s cooloff, eviction off). Telemetry: quotes_pulled
+    reason=fast_move, guard_false_alarm.
+  - M3 dollar-loss cap (`max_loss_per_market`): long caps at L/p, short at
+    L/(1-p) — tail positions get the smallest caps (BS-for-PM handbook,
+    arXiv 2510.15205). Visible as clamped sizes in quote_decision.
+  - M4 spot-jump pull (`spot_jump_*`, spot_feed task): Coinbase move >= 8bps
+    in 10s cancels that series' quotes 20s. PULL ONLY — the spot feed must
+    never price (the pricing model measurably lost to the book; see
+    research/ARB-AND-15MIN-STUDY-2026-08-06.md). BNB/HYPE/GOLD/SILVER have
+    no feed and run without M4. Telemetry: fifteen_spot_pull, order_canceled
+    reason=spot_jump.
 
 ## Conventions
 

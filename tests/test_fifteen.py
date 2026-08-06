@@ -288,6 +288,104 @@ def test_fifteen_series_positions_ride_to_settlement():
     assert series_of("KXFM30YMTG-26DEC31-T5.75") not in fifteen
 
 
+# ------------------------------------------ evidence levers (M1-M4, 2026-08-06)
+
+def test_tilt_suppresses_selling_favorites_and_buying_longshots():
+    D9 = D("0.90")
+    # Tail market at 0.965/0.975: joining the ask would SELL the favorite.
+    yes, no = _books({"0.965": 40}, {"0.975": 30})
+    q = join_touch_quotes(yes, no, None, 0, None, 0, 0, 5, 1, tilt_threshold=D9)
+    assert q.bid == D("0.965") and q.ask is None
+    assert q.tilt_ask and not q.tilt_bid
+    # Mirror tail at 0.025/0.035: joining the bid would BUY the longshot.
+    yes2, no2 = _books({"0.025": 40}, {"0.035": 30})
+    q2 = join_touch_quotes(yes2, no2, None, 0, None, 0, 0, 5, 1, tilt_threshold=D9)
+    assert q2.ask == D("0.035") and q2.bid is None
+    assert q2.tilt_bid and not q2.tilt_ask
+    # Mid-range: both sides quoted, no tilt flags.
+    yes3, no3 = _books({"0.50": 10}, {"0.51": 10})
+    q3 = join_touch_quotes(yes3, no3, None, 0, None, 0, 0, 5, 1, tilt_threshold=D9)
+    assert q3.bid is not None and q3.ask is not None
+    assert not q3.tilt_bid and not q3.tilt_ask
+
+
+def test_dollar_loss_cap_shapes_inventory_by_price():
+    # Long favorites at 0.97: worst loss 0.97/contract -> cap floor(2.5/0.97)=2.
+    yes, no = _books({"0.97": 40}, {"0.99": 30})
+    q = join_touch_quotes(yes, no, None, 0, None, 0, 0, 5, 3,
+                          max_loss_per_market=D("2.50"))
+    assert q.bid == D("0.97") and q.bid_size == 2
+    # Shorting at ask 0.99: worst loss 0.01/contract -> flat cap 5 binds, not L.
+    assert q.ask == D("0.99") and q.ask_size == 3
+    # At 0.50 the dollar cap equals the flat cap: full size available.
+    yes2, no2 = _books({"0.50": 10}, {"0.51": 10})
+    q2 = join_touch_quotes(yes2, no2, None, 0, None, 0, 0, 5, 3,
+                           max_loss_per_market=D("2.50"))
+    assert q2.bid_size == 3 and q2.ask_size == 3
+
+
+def test_detect_jump_bps():
+    from bacchus_mm.fifteen import detect_jump
+
+    now = 100.0
+    flat = [(now - 8, 64000.0), (now - 4, 64010.0), (now, 64005.0)]
+    assert detect_jump(flat, 10.0, now) < 8
+    jump = [(now - 8, 64000.0), (now - 4, 64010.0), (now, 64080.0)]
+    assert detect_jump(jump, 10.0, now) > 8  # 12.5 bps vs oldest
+    # Samples outside the window are ignored.
+    stale = [(now - 60, 63000.0), (now, 64000.0)]
+    assert detect_jump(stale, 10.0, now) == 0.0
+    assert detect_jump([(now, 1.0)], 10.0, now) == 0.0
+
+
+@pytest.mark.asyncio
+async def test_worker_spot_pull_cancels_and_resumes(tmp_path):
+    import time as _t
+
+    yes, no = _books({"0.50": 10}, {"0.51": 10})
+    ex = _StubExchange(yes, no)
+    events = EventLog(tmp_path, "s")
+    risk = RiskManager(params=RiskParams(max_contracts_per_market=5), state_dir=tmp_path)
+    w = MarketWorker(
+        "KXBTC15M-TEST", ex, StrategyParams(quote_size=1, tick=D("0.001")),
+        risk, events, WorkerConfig(join_touch_only=True), dry_run=True,
+    )
+    w.on_book_top(BookTop(ticker="KXBTC15M-TEST", bid=D("0.50"), bid_size=10,
+                          ask=D("0.51"), ask_size=10, ts_ms=1))
+    w.pulled_until = _t.monotonic() + 60  # M4 trigger fired
+    await w._requote()
+    events.flush()
+    n = events.db.execute(
+        "SELECT COUNT(*) FROM events WHERE type='quote_decision'"
+    ).fetchone()[0]
+    assert n == 0, "pulled worker must not quote"
+    w.pulled_until = 0.0  # cooloff expired
+    await w._requote()
+    events.flush()
+    n = events.db.execute(
+        "SELECT COUNT(*) FROM events WHERE type='quote_decision'"
+    ).fetchone()[0]
+    assert n == 1
+    events.close()
+
+
+def test_fifteen_params_evidence_lever_config():
+    p = FifteenParams.from_config({"fifteen": {
+        "tilt_tail_threshold": 0.85, "max_loss_per_market": 1.0,
+        "fast_move_threshold": 0.05, "spot_jump_bps": 0,
+        "spot_products": {"KXBTC15M": "BTC-USD"},
+    }})
+    assert p.tilt_tail_threshold == D("0.85")
+    assert p.max_loss_per_market == D("1.0")
+    assert p.fast_move_threshold == D("0.05")
+    assert p.spot_jump_bps == 0.0  # disables M4
+    assert p.spot_products == {"KXBTC15M": "BTC-USD"}
+    d = FifteenParams.from_config({})
+    assert d.tilt_tail_threshold == D("0.90")
+    assert d.fast_move_cooloff == 45.0
+    assert "KXBTC15M" in d.spot_products and "KXBNB15M" not in d.spot_products
+
+
 # ---------------------------------------------- fractional-fill residual carry
 
 @pytest.mark.asyncio

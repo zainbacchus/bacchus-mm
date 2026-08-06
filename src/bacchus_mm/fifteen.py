@@ -55,6 +55,33 @@ DEFAULT_SERIES = [
     "KXHYPE15M", "KXNEAR15M", "KXGOLD15M", "KXSILVER15M",
 ]
 
+# 2026-08-06 (M4): Coinbase spot products per series, for the defensive
+# jump-pull feed. BNB/HYPE trade nowhere on Coinbase and Gold/Silver have no
+# free tick feed — those series simply run without M4 (config-overridable).
+DEFAULT_SPOT_PRODUCTS = {
+    "KXBTC15M": "BTC-USD",
+    "KXETH15M": "ETH-USD",
+    "KXSOL15M": "SOL-USD",
+    "KXDOGE15M": "DOGE-USD",
+    "KXNEAR15M": "NEAR-USD",
+}
+
+
+def detect_jump(samples: list, window_s: float, now: float) -> float:
+    """Max absolute move (in basis points) between the LATEST price and any
+    sample inside the trailing window. samples: [(ts, price), ...] appended in
+    time order. Pure function for testability."""
+    if len(samples) < 2:
+        return 0.0
+    t_last, p_last = samples[-1]
+    worst = 0.0
+    for t, p in reversed(samples[:-1]):
+        if now - t > window_s:
+            break
+        if p > 0:
+            worst = max(worst, abs(p_last / p - 1.0) * 10_000)
+    return worst
+
 
 @dataclass
 class FifteenParams:
@@ -81,6 +108,31 @@ class FifteenParams:
     # the product we studied (e.g. a mislabeled daily).
     min_window_seconds: float = 60.0
     max_window_seconds: float = 3600.0
+    # ---- 2026-08-06 evidence levers (each independently disable-able) ----
+    # M1 favorite-longshot tilt (join_touch.py). Calibrated on 1,440 settled
+    # 15M windows 2026-08-06: late-window favorites at 0.98-1.00 settle
+    # +0.57c/ct above price (n=2005, ~4 sigma); the longshot mirror is
+    # negative. 0 disables.
+    tilt_tail_threshold: Decimal = Decimal("0.90")
+    # M3 price-shaped inventory cap in worst-case dollars per market
+    # (BS-for-PM handbook): long caps at max_loss/p, short at max_loss/(1-p),
+    # never above max_contracts_per_market. At p=0.50 this equals the flat
+    # cap 5. 0 disables.
+    max_loss_per_market: Decimal = Decimal("2.50")
+    # M2 toxicity pull: the fast-move guard re-enabled with 15M-scale
+    # parameters (Bartlett 2026: one-sided flow predicts maker losses).
+    # Threshold 9 disables (the measurement-mode default before this).
+    fast_move_threshold: Decimal = Decimal("0.03")
+    fast_move_window: float = 10.0
+    fast_move_cooloff: float = 45.0
+    # M4 spot-jump defensive pull (Budish et al: don't be the stale quote).
+    # A move of jump_bps within jump_window_seconds on the series' spot feed
+    # cancels that series' quotes for jump_cooloff_seconds. 0 bps disables.
+    spot_jump_bps: float = 8.0
+    spot_jump_window_seconds: float = 10.0
+    spot_jump_cooloff_seconds: float = 20.0
+    spot_poll_seconds: float = 2.0
+    spot_products: dict = field(default_factory=lambda: dict(DEFAULT_SPOT_PRODUCTS))
 
     @classmethod
     def from_config(cls, raw: dict) -> "FifteenParams":
@@ -113,6 +165,20 @@ class FifteenParams:
             max_tick=Decimal(str(f.get("max_tick", d.max_tick))),
             min_window_seconds=float(f.get("min_window_seconds", d.min_window_seconds)),
             max_window_seconds=float(f.get("max_window_seconds", d.max_window_seconds)),
+            tilt_tail_threshold=Decimal(str(f.get("tilt_tail_threshold", d.tilt_tail_threshold))),
+            max_loss_per_market=Decimal(str(f.get("max_loss_per_market", d.max_loss_per_market))),
+            fast_move_threshold=Decimal(str(f.get("fast_move_threshold", d.fast_move_threshold))),
+            fast_move_window=float(f.get("fast_move_window", d.fast_move_window)),
+            fast_move_cooloff=float(f.get("fast_move_cooloff", d.fast_move_cooloff)),
+            spot_jump_bps=float(f.get("spot_jump_bps", d.spot_jump_bps)),
+            spot_jump_window_seconds=float(
+                f.get("spot_jump_window_seconds", d.spot_jump_window_seconds)
+            ),
+            spot_jump_cooloff_seconds=float(
+                f.get("spot_jump_cooloff_seconds", d.spot_jump_cooloff_seconds)
+            ),
+            spot_poll_seconds=float(f.get("spot_poll_seconds", d.spot_poll_seconds)),
+            spot_products=dict(f.get("spot_products", d.spot_products)),
         )
 
 
@@ -356,9 +422,18 @@ async def run_fifteen(cfg: Config, live: bool, dry_run: bool) -> None:
             # quote change; 5s tripled the row rate for no analytical gain and
             # fed the event-loop starvation seen in the first live hour.
             mid_mark_interval=15.0,
-            fast_move_threshold=Decimal("9"),
+            # M2 (2026-08-06): the guard IS the toxicity pull, re-enabled with
+            # 15M-scale parameters (was parked at $9 in measurement mode).
+            # Eviction stays effectively off: a window lives 15 minutes, so
+            # pull-and-resume is the only sane response to a trip.
+            fast_move_threshold=p.fast_move_threshold,
+            fast_move_window=p.fast_move_window,
+            fast_move_cooloff=p.fast_move_cooloff,
             guard_evict_trips=10_000,
             join_touch_only=True,
+            # M1 + M3 (2026-08-06): see join_touch.py for sources/semantics.
+            join_tilt_threshold=(p.tilt_tail_threshold or None),
+            join_max_loss_per_market=(p.max_loss_per_market or None),
             # audit 2026-08-06: dedup identical decisions (30s heartbeat) —
             # these books wake workers ~1/s; unthrottled that is ~0.5GB/day of
             # identical rows and a full fly volume mid-week.
@@ -550,6 +625,68 @@ async def run_fifteen(cfg: Config, live: bool, dry_run: bool) -> None:
                     close_times.pop(tkr, None)
                 await asyncio.sleep(1.0)
 
+        async def spot_feed():
+            """M4 (2026-08-06): defensive spot-jump pull. Polls Coinbase spot
+            for mapped series; a move >= spot_jump_bps inside the window
+            cancels that series' quotes for a cooloff. Budish et al: the slow
+            maker's edge is refusing to be the stale quote — this feed exists
+            to PULL, never to price (the pricing experiment already lost)."""
+            import ssl
+
+            import aiohttp
+            import certifi
+
+            ctx = ssl.create_default_context(cafile=certifi.where())
+            hist: dict[str, list] = {s: [] for s in p.spot_products}
+            last_emit: dict[str, float] = {}
+            async with aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=5),
+                connector=aiohttp.TCPConnector(ssl=ctx),
+                headers={"User-Agent": "bacchus-mm/0.1"},
+            ) as session:
+                while not stop_event.is_set():
+                    for series, product in p.spot_products.items():
+                        try:
+                            async with session.get(
+                                f"https://api.exchange.coinbase.com/products/{product}/ticker"
+                            ) as r:
+                                d = await r.json()
+                            px = float(d.get("price") or 0)
+                        except Exception:  # noqa: BLE001 — one venue hiccup must not kill M4
+                            continue
+                        if px <= 0:
+                            continue
+                        now = time.monotonic()
+                        h = hist[series]
+                        h.append((now, px))
+                        del h[: max(0, len(h) - 60)]
+                        bps = detect_jump(h, p.spot_jump_window_seconds, now)
+                        if bps < p.spot_jump_bps:
+                            continue
+                        pulled = []
+                        for tkr, w in list(workers.items()):
+                            if (
+                                tkr.startswith(series + "-")
+                                and not w.evicted
+                                and not w.close_reaped
+                            ):
+                                w.pulled_until = now + p.spot_jump_cooloff_seconds
+                                w.wake()
+                                pulled.append(tkr)
+                        if pulled and now - last_emit.get(series, 0) >= 5:
+                            last_emit[series] = now
+                            events.emit(
+                                "fifteen_spot_pull", ticker=pulled[0], series=series,
+                                move_bps=round(bps, 1),
+                                cooloff=p.spot_jump_cooloff_seconds,
+                            )
+                            log.info(
+                                "spot jump %s: %.1f bps in %.0fs -> pulled %s for %.0fs",
+                                series, bps, p.spot_jump_window_seconds,
+                                ",".join(pulled), p.spot_jump_cooloff_seconds,
+                            )
+                    await asyncio.sleep(p.spot_poll_seconds)
+
         async def risk_loop():
             last_kv_persist = time.monotonic()
             while not stop_event.is_set():
@@ -605,6 +742,8 @@ async def run_fifteen(cfg: Config, live: bool, dry_run: bool) -> None:
         _spawn(consume_stream(), "stream")
         _spawn(discovery_loop(), "discovery")
         _spawn(pull_loop(), "pull_loop")
+        if p.spot_jump_bps and p.spot_products:
+            _spawn(spot_feed(), "spot_feed")  # M4; runs in observe too (telemetry)
         _spawn(risk_loop(), "risk_loop")
         _spawn(eventlog_flush_loop(), "eventlog_flush")
         _spawn(marks_loop(), "marks_loop")

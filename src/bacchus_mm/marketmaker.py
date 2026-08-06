@@ -90,6 +90,10 @@ class WorkerConfig:
     # mirror) — enough to fill the fly volume mid-week and kill the
     # synchronous fills writes. Every CHANGED decision is still logged.
     quote_decision_min_interval: float = 0.0
+    # 2026-08-06 evidence levers (join-touch mode only; see join_touch.py for
+    # the sources and the exact semantics). 0/None disables each.
+    join_tilt_threshold: Optional[Decimal] = None
+    join_max_loss_per_market: Optional[Decimal] = None
 
 
 class FastMoveGuard:
@@ -347,6 +351,11 @@ class MarketWorker:
         # timestamp, for the quote_decision_min_interval dedup.
         self._last_qd: Optional[tuple] = None
         self._last_qd_at = 0.0
+        # 2026-08-06 (M4 spot-jump pull): an external feed (fifteen.py's spot
+        # task) sets a monotonic deadline; _requote cancels resting quotes and
+        # stays out until it passes. Budish et al: the slow maker's only
+        # winning move on a jump is to not be resting.
+        self.pulled_until = 0.0
 
     # Called from the websocket consumer (same event loop).
     def on_book_top(self, top: BookTop) -> None:
@@ -502,6 +511,20 @@ class MarketWorker:
         if self.evicted and not self.reduce_only:
             return
 
+        # 2026-08-06 (M4): external spot-jump pull — cancel and stay out until
+        # the deadline passes. Checked before the gate so a jump pull works
+        # even while other machinery would otherwise keep exit quotes alive:
+        # a spot jump is exactly when a resting exit gets sniped too.
+        if time.monotonic() < self.pulled_until:
+            self.bid_order = await self._reconcile(
+                Side.BID, self.bid_order, None, 0, cancel_reason="spot_jump"
+            )
+            self.ask_order = await self._reconcile(
+                Side.ASK, self.ask_order, None, 0, cancel_reason="spot_jump"
+            )
+            self._dirty.set()  # re-check when the pull expires
+            return
+
         # 2026-07-17 (C1): global sweep cooloff — the reconcile pass saw every
         # resting order vanish exchange-side in one pass (order-group trip or
         # maintenance pause). Sit flat and re-arm on expiry. Unlike the
@@ -591,6 +614,8 @@ class MarketWorker:
                 inventory=q,
                 max_inventory=self.risk.params.max_contracts_per_market,
                 size=self.strategy.quote_size,
+                tilt_threshold=self.cfg.join_tilt_threshold,
+                max_loss_per_market=self.cfg.join_max_loss_per_market,
             )
             if quotes.bid is not None:
                 mine = self.bid_order.count if (
@@ -693,6 +718,10 @@ class MarketWorker:
                 joined_ask=quotes.joined_ask,
                 join_depth_bid=join_depth_bid,
                 join_depth_ask=join_depth_ask,
+                # 2026-08-06 attribution: which evidence lever suppressed a
+                # side this cycle (set by join_touch_quotes; absent on A-S).
+                tilt_bid=getattr(quotes, "tilt_bid", False),
+                tilt_ask=getattr(quotes, "tilt_ask", False),
                 dry_run=self.dry_run,
             )
         self.bid_order = await self._reconcile(

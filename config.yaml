@@ -31,6 +31,32 @@ fifteen:
   # first live hour (REST creates timing out + health probe misses). 2s is
   # still 30x fresher than the study's minute-refresh baseline.
   requote_min_interval: 2.0
+  # ---- 2026-08-06 evidence levers (owner: "apply all 4"). Each is
+  # independently disable-able and emits its own attribution telemetry, so
+  # the next review can score them separately. Sources in ROADMAP Phase D
+  # and strategy/join_touch.py.
+  # M1 favorite-longshot tilt: never sell the favorite / buy the longshot in
+  # the tails. Calibrated on 1,440 settled 15M windows (2026-08-06): buying
+  # favorites at 0.98-1.00 late-window settles +0.57c/ct ABOVE price
+  # (n=2005, ~4sigma); the longshot mirror is negative. 0 disables.
+  tilt_tail_threshold: 0.90
+  # M3 price-shaped inventory cap, worst-case dollars per market: long caps
+  # at max_loss/p, short at max_loss/(1-p) (never above the flat cap).
+  # Equals the flat cap 5 at p=0.50. 0 disables.
+  max_loss_per_market: 2.50
+  # M2 toxicity pull: the fast-move guard with 15M-scale parameters
+  # (one-sided flow predicts maker losses; pull + short cooloff, no
+  # eviction). Threshold 9 disables.
+  fast_move_threshold: 0.03
+  fast_move_window: 10
+  fast_move_cooloff: 45
+  # M4 spot-jump defensive pull: Coinbase spot move >= jump bps within the
+  # window cancels that series' quotes for the cooloff. PULL only, never
+  # pricing. BNB/HYPE/GOLD/SILVER have no mapped feed and run without M4.
+  spot_jump_bps: 8
+  spot_jump_window_seconds: 10
+  spot_jump_cooloff_seconds: 20
+  spot_poll_seconds: 2
   requote_tolerance: 0.002 # decicent books: chase the touch only when >= 2 ticks away
   order_ttl_seconds: 60
   settlement_poll_seconds: 300 # windows settle ~30min after close; recycle capital promptly
