@@ -187,7 +187,12 @@ logging:
   # Retention prunes ONLY the events firehose; the JSONL files are the
   # archive and fills/mids/pnl_marks/venue_marks/kv are kept forever.
   # Set <= 0 to disable pruning.
-  events_keep_days: 14
+  # 2026-08-06 (Phase D audit): 14 -> 5. Fifteen mode's event volume is far
+  # higher than calm mode even after quote_decision dedup (order churn per
+  # window x 9 series); 14 days of it risks filling the fly volume. Also
+  # WATCH the JSONL files (data/events-*.jsonl, never pruned) — see
+  # docs/deploy.md "Disk" note.
+  events_keep_days: 5
 
 # 2026-07-17 (DEPLOY): /health endpoint for fly.io machine checks (runbook:
 # docs/deploy.md). Off by default locally; the HEALTH_PORT env var (set in

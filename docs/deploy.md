@@ -151,6 +151,22 @@ config-file half becomes an env var:
 Note the order-group fail-closed rule still applies: on prod+live the bot
 refuses to trade if Kalshi's order-group creation fails (`startup_aborted`).
 
+### Disk (fifteen mode, 2026-08-06)
+
+The 15-minute markets generate far more events than calm mode (order churn
+per window x 9 series). The SQLite events table is pruned to
+`logging.events_keep_days` (now 5), but the `data/events-*.jsonl` mirror is
+NEVER pruned — it is the archive. On the fly volume, check weekly:
+
+```bash
+fly ssh console -C "df -h /app/data"
+fly ssh console -C "sh -c 'ls -lh /app/data/events-*.jsonl | tail -5'"
+```
+
+If the volume runs hot, delete the oldest JSONL files (they are also the only
+copy — pull anything you want to keep first with `fly ssh sftp get`), or
+extend the volume: `fly volumes extend <id> -s <GB>`.
+
 ## 8. One-off commands on the live machine
 
 The machine's working directory is `/app` and data is `/app/data`, so every

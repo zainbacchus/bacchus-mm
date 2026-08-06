@@ -82,6 +82,14 @@ class WorkerConfig:
     # (strategy/join_touch.py) — the fifteen mode's measurement quoting. The
     # A-S path and its join heuristic are untouched when this is False.
     join_touch_only: bool = False
+    # 2026-08-06 (Phase D audit): quote_decision de-duplication. 0 keeps the
+    # legacy emit-every-cycle behavior; >0 suppresses the emit when the target
+    # quotes are UNCHANGED and fewer than this many seconds have passed since
+    # the last one. The fifteen books wake the worker ~1/s, which is ~780k
+    # identical decision rows/day across 9 windows (~0.5GB/day with the JSONL
+    # mirror) — enough to fill the fly volume mid-week and kill the
+    # synchronous fills writes. Every CHANGED decision is still logged.
+    quote_decision_min_interval: float = 0.0
 
 
 class FastMoveGuard:
@@ -335,6 +343,10 @@ class MarketWorker:
         # re-places; only declared lost after create_confirm_lost_lookups
         # consecutive empty lookups (2026-07-18, round 2).
         self._pending_create: dict[Side, tuple[str, float, int]] = {}
+        # 2026-08-06 (Phase D audit): last emitted quote_decision target +
+        # timestamp, for the quote_decision_min_interval dedup.
+        self._last_qd: Optional[tuple] = None
+        self._last_qd_at = 0.0
 
     # Called from the websocket consumer (same event loop).
     def on_book_top(self, top: BookTop) -> None:
@@ -648,28 +660,41 @@ class MarketWorker:
                     "WIND-DOWN ESCALATION %s: crossing as taker %s %d @ %.2f",
                     self.ticker, side.value, size, price,
                 )
-        self.events.emit(
-            "quote_decision",
-            ticker=self.ticker,
-            mid=mid,
-            book_bid=top.bid,
-            book_bid_size=top.bid_size,
-            book_ask=top.ask,
-            book_ask_size=top.ask_size,
-            inventory=q,
-            sigma=quotes.sigma,
-            reservation=quotes.reservation,
-            half_spread=quotes.half_spread,
-            bid=quotes.bid,
-            bid_size=quotes.bid_size,
-            ask=quotes.ask,
-            ask_size=quotes.ask_size,
-            joined_bid=quotes.joined_bid,
-            joined_ask=quotes.joined_ask,
-            join_depth_bid=join_depth_bid,
-            join_depth_ask=join_depth_ask,
-            dry_run=self.dry_run,
-        )
+        # 2026-08-06 (Phase D audit): suppress the emit when nothing changed
+        # and the heartbeat interval hasn't elapsed (see WorkerConfig).
+        qd_key = (quotes.bid, quotes.bid_size, quotes.ask, quotes.ask_size, q)
+        now_mono = time.monotonic()
+        if (
+            self.cfg.quote_decision_min_interval > 0
+            and qd_key == self._last_qd
+            and now_mono - self._last_qd_at < self.cfg.quote_decision_min_interval
+        ):
+            pass  # unchanged decision inside the heartbeat window: no row
+        else:
+            self._last_qd = qd_key
+            self._last_qd_at = now_mono
+            self.events.emit(
+                "quote_decision",
+                ticker=self.ticker,
+                mid=mid,
+                book_bid=top.bid,
+                book_bid_size=top.bid_size,
+                book_ask=top.ask,
+                book_ask_size=top.ask_size,
+                inventory=q,
+                sigma=quotes.sigma,
+                reservation=quotes.reservation,
+                half_spread=quotes.half_spread,
+                bid=quotes.bid,
+                bid_size=quotes.bid_size,
+                ask=quotes.ask,
+                ask_size=quotes.ask_size,
+                joined_bid=quotes.joined_bid,
+                joined_ask=quotes.joined_ask,
+                join_depth_bid=join_depth_bid,
+                join_depth_ask=join_depth_ask,
+                dry_run=self.dry_run,
+            )
         self.bid_order = await self._reconcile(
             Side.BID, self.bid_order, quotes.bid, quotes.bid_size,
             post_only=Side.BID not in cross,

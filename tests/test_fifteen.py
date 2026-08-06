@@ -232,6 +232,62 @@ async def test_worker_join_touch_close_reaped_pulls_and_stays_out(tmp_path):
     events.close()
 
 
+@pytest.mark.asyncio
+async def test_worker_quote_decision_dedup_heartbeat(tmp_path):
+    """Audit fix: identical decisions inside the heartbeat window emit no row;
+    a changed target always emits. Unthrottled, the 15M books produce ~780k
+    identical rows/day."""
+    yes, no = _books({"0.905": 50, "0.904": 120}, {"0.906": 40})
+    ex = _StubExchange(yes, no)
+    events = EventLog(tmp_path, "s")
+    risk = RiskManager(params=RiskParams(max_contracts_per_market=5), state_dir=tmp_path)
+    w = MarketWorker(
+        "KXBTC15M-TEST", ex, StrategyParams(quote_size=1, tick=D("0.001")),
+        risk, events, WorkerConfig(join_touch_only=True, quote_decision_min_interval=30.0),
+        dry_run=True,
+    )
+    top = BookTop(ticker="KXBTC15M-TEST", bid=D("0.905"), bid_size=50,
+                  ask=D("0.906"), ask_size=40, ts_ms=1)
+    w.on_book_top(top)
+    await w._requote()
+    await w._requote()
+    await w._requote()
+    events.flush()
+    n = events.db.execute(
+        "SELECT COUNT(*) FROM events WHERE type='quote_decision'"
+    ).fetchone()[0]
+    assert n == 1, "unchanged decisions inside the heartbeat must not emit"
+    # Touch moves: the changed target emits immediately.
+    ex._levels = _books({"0.907": 30, "0.905": 50}, {"0.908": 25})
+    w.on_book_top(BookTop(ticker="KXBTC15M-TEST", bid=D("0.907"), bid_size=30,
+                          ask=D("0.908"), ask_size=25, ts_ms=2))
+    await w._requote()
+    events.flush()
+    n = events.db.execute(
+        "SELECT COUNT(*) FROM events WHERE type='quote_decision'"
+    ).fetchone()[0]
+    assert n == 2
+    events.close()
+
+
+def test_legacy_run_path_emits_every_cycle_by_default():
+    """The dedup must be opt-in: WorkerConfig default keeps the calm-mode
+    emit-every-cycle behavior the analyze tooling was built on."""
+    assert WorkerConfig().quote_decision_min_interval == 0.0
+
+
+def test_fifteen_series_positions_ride_to_settlement():
+    """Audit fix: a held 15M position at startup (mid-window restart) must not
+    get a wind-down worker — its exit quotes would rest into the settlement
+    averaging window. series_of membership is the gate run_fifteen uses."""
+    from bacchus_mm.fees import series_of
+
+    fifteen = set(DEFAULT_SERIES)
+    assert series_of("KXBTC15M-26AUG061400-00") in fifteen
+    assert series_of("KXGTEMP-26-P0") not in fifteen
+    assert series_of("KXFM30YMTG-26DEC31-T5.75") not in fifteen
+
+
 # ----------------------------------------------- zero-picks wind-down predicate
 
 def test_wind_down_zero_picks_predicate():

@@ -43,6 +43,7 @@ from typing import Optional
 from .config import Config
 from .eventlog import EventLog
 from .exchange.kalshi import KalshiExchange
+from .fees import series_of
 from .health import HealthState, start_health_server
 from .marketmaker import MarketWorker, QuotingGate, WorkerConfig
 from .reconcile import managed_tickers, reconcile_loop
@@ -318,6 +319,10 @@ async def run_fifteen(cfg: Config, live: bool, dry_run: bool) -> None:
             fast_move_threshold=Decimal("9"),
             guard_evict_trips=10_000,
             join_touch_only=True,
+            # audit 2026-08-06: dedup identical decisions (30s heartbeat) —
+            # these books wake workers ~1/s; unthrottled that is ~0.5GB/day of
+            # identical rows and a full fly volume mid-week.
+            quote_decision_min_interval=30.0,
         )
         # Legacy wind-down workers: standard calm-mode config (A-S exit path).
         wcfg_legacy = WorkerConfig(
@@ -339,14 +344,26 @@ async def run_fifteen(cfg: Config, live: bool, dry_run: bool) -> None:
         )
         gate = QuotingGate()
 
+        fifteen_series = set(p.series)
         for t, pos in positions.items():
-            if pos != 0 and t not in already_settled:
-                workers[t] = MarketWorker(
-                    t, ex, cfg.strategy, risk, events, wcfg_legacy,
-                    dry_run=dry_run, reduce_only=True, gate=gate,
-                )
-                events.emit("wind_down_started", ticker=t, position=pos)
-                log.info("wind-down worker started for legacy position %s (%+d)", t, pos)
+            if pos == 0 or t in already_settled:
+                continue
+            # 2026-08-06 (audit): a held FIFTEEN-series position (mid-window
+            # restart) must NOT get a wind-down worker — the A-S exit path is
+            # not tracked by pull_loop, so its quotes would rest straight into
+            # the settlement averaging window. Window positions ride to
+            # settlement by design; the poll realizes them. Defined risk
+            # <= max_contracts_per_market x $1.
+            if series_of(t) in fifteen_series:
+                events.emit("fifteen_position_rides", ticker=t, position=pos)
+                log.info("held fifteen position rides to settlement: %s (%+d)", t, pos)
+                continue
+            workers[t] = MarketWorker(
+                t, ex, cfg.strategy, risk, events, wcfg_legacy,
+                dry_run=dry_run, reduce_only=True, gate=gate,
+            )
+            events.emit("wind_down_started", ticker=t, position=pos)
+            log.info("wind-down worker started for legacy position %s (%+d)", t, pos)
 
         _orphan_mark: dict[str, float] = {}
 
