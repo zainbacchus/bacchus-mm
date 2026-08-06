@@ -38,6 +38,30 @@ window), and fills ride to settlement with hard inventory caps. Windows
 whose price structure the bot cannot fully parse are refused, not guessed
 at. See [ROADMAP.md](ROADMAP.md) Phase D for the full spec.
 
+On top of the symmetric join, four **evidence levers** shape which fills the
+bot declines (each independently disable-able in config, each logging its
+own attribution telemetry so reviews can score them separately):
+
+1. *Favorite-longshot tilt*: in the tails, never sell the favorite or buy
+   the longshot. Calibrated on 1,440 settled 15-minute windows: favorites
+   at 0.98-1.00 settle +0.57c/contract above their price (n=2,005, ~4
+   sigma); the longshot mirror is negative. Consistent with Buergi, Deng &
+   Whelan (2026), who find Kalshi makers on >=50c contracts earn +2.6%
+   after fees.
+2. *Toxicity pull*: quotes are pulled during one-sided repricing bursts
+   (one-sided flow predicts maker losses; Bartlett 2026) and resume after a
+   short cooloff.
+3. *Price-shaped inventory caps*: worst-case dollars per market, so tail
+   positions get the smallest contract caps (the "Black-Scholes for
+   prediction markets" handbook's boundary guidance).
+4. *Spot-jump pull*: an external spot feed (Coinbase) cancels a series'
+   quotes for a cooloff when the underlying jumps. Strictly a cancel
+   trigger, never a pricing input: a spot-driven fair-value model measurably
+   lost to the market's own mid at every minute of window life, but the slow
+   maker's real edge is refusing to be the stale quote (Budish et al.).
+   Series without a free spot feed run without this lever, a natural
+   control group.
+
 ## The retired strategy (and why it is still in the repo)
 
 The original bot selected calm markets (Economics, Weather) and quoted
@@ -53,8 +77,12 @@ cross-venue phases were retired with it.
 
 The [research/](research/) directory is the lab notebook: market-structure
 studies, an intra-exchange arbitrage scan (gross violations are common; net
-of fees there were zero), the 15-minute-market studies, and the fee-schedule
-verification that flipped the current strategy from marginal to viable.
+of fees there were zero), the 15-minute-market studies, the fee-schedule
+verification that flipped the current strategy from marginal to viable, and
+a calibration study of 1,440 settled 15-minute windows that fills a hole in
+the published literature (the large calibration papers exclude prices beyond
+5c/95c and stop at the 1-hour horizon; ours measures exactly that regime and
+finds the favorite-longshot tilt alive at 15 minutes).
 
 ## How it works
 
@@ -117,10 +145,15 @@ deliberate action, never a default. Before the first live run,
 
 For 24/7 operation the bot deploys to fly.io as a single worker Machine with
 a 1GB volume for `data/`, an internal `/health` machine check, and
-auto-restart. About $2/mo. The repo ships the `Dockerfile`, `fly.toml` (whose
+auto-restart. The calm-market era ran on the smallest VM (~$2/mo); the
+15-minute firehose starved its event loop (order placements and the health
+probe timing out together), so the deployed size is now shared-cpu-2x with
+1GB RAM, roughly $10/mo. The repo ships the `Dockerfile`, `fly.toml` (whose
 process command is the deployed strategy), and the step-by-step runbook:
 [docs/deploy.md](docs/deploy.md). The 15-minute markets generate a lot of
-events; see the runbook's "Disk" note.
+events; see the runbook's "Disk" note. Deliberately a SINGLE machine: two
+machines would be two bots doubling exposure and fighting over orders, and
+the single-instance lock does not reach across hosts.
 
 ## Configuration
 
@@ -134,7 +167,9 @@ loaded at all.
 ## Safety model
 
 1. Post-only orders: a quote that would cross is rejected, never a taker fill.
-2. Client-side caps: per-market contracts, per-market notional, gross notional.
+2. Client-side caps: per-market contracts, per-market notional, gross
+   notional; in fifteen mode additionally a worst-case dollar-loss cap per
+   market that shrinks contract caps toward the price boundaries.
 3. Kill switch: drawdown from the ACCOUNT-equity high-water mark (chained
    across sessions) ≥ threshold → cancel all, halt. `halt-clear` re-arms by
    rebasing the high-water mark to current equity: clearing a halt means
@@ -160,5 +195,14 @@ per-contract expectancy after fees against settlement, not on monthly income
 targets. Run it small, read the logs, and let the data decide what happens
 next; everything this project has learned so far is written down in
 [research/](research/).
+
+The first live day of fifteen mode is a fair preview of the workflow: the
+kill switch tripped on mark-to-market noise within one window cycle, the
+settled truth measured 3.4x smaller than the marked loss, the incident
+surfaced two real bugs (fractional-fill truncation blinding the caps, and a
+crash loop that blocked re-arming), and the fixes plus four evidence-based
+strategy levers shipped the same day. Expect the bot to halt, expect the
+logs to explain why, and expect the strategy you deploy next week to differ
+from this one.
 
 This is not financial advice; use at your own risk. See [LICENSE](LICENSE).
