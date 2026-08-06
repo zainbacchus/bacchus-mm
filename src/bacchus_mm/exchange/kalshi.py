@@ -24,7 +24,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 
 from .base import BookTop, ExchangeAdapter, Fill, MarketInfo, MarketLifecycle, Order, Side
-from ..fees import FeeSchedule, compute_fee
+from ..fees import FeeSchedule, compute_fee, series_of
 
 log = logging.getLogger(__name__)
 
@@ -638,6 +638,7 @@ class KalshiExchange(ExchangeAdapter):
                                 fee = compute_fee(
                                     self.fee_schedule, count,
                                     yp or Decimal(0), bool(m.get("is_taker")),
+                                    series=series_of(m.get("market_ticker") or ""),
                                 )
                                 fee_source = "computed"
                             else:

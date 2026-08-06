@@ -135,7 +135,7 @@ class Config:
         fee_schedules = {
             venue: FeeSchedule(
                 taker_rate=_dec(f or {}, "taker_rate", Decimal("0.07")),
-                maker_rate=_dec(f or {}, "maker_rate", Decimal("0")),
+                maker_rate=_dec(f or {}, "maker_rate", Decimal("0.0175")),
                 formula=(f or {}).get("formula", "kalshi_v1"),
             )
             for venue, f in data.get("fees", {}).items()

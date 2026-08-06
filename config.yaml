@@ -178,7 +178,11 @@ health:
 # Add a polymarket: block when that adapter lands (PM US has nonzero base fees).
 fees:
   kalshi:
-    formula: kalshi_v1 # ceil(rate x C x P x (1-P) x 100)/100 dollars
+    formula: kalshi_v1 # round-up-to-centicent(rate x C x P x (1-P)) dollars
     taker_rate: 0.07
-    maker_rate: 0.0 # resting orders are free on Kalshi's general schedule
+    # 2026-08-06: maker fees apply ONLY to the ~76 series in the schedule's
+    # Non-Standard Fees table (encoded in fees.py); other series pay zero.
+    # Confirmed against 115 of our own exchange-reported fills. This rate is
+    # what in-table series (KXCPI, KXFED, ...) are charged.
+    maker_rate: 0.0175
 

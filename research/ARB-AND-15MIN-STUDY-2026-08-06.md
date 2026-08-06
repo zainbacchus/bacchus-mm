@@ -181,6 +181,18 @@ explain it, which would mean the table is not the whole rule. Unresolvable from
 here: the local DB predates the `fee` column migration and the live data is on
 the fly volume.
 
+**RESOLVED 2026-08-06 (same day, later session):** data/fly-snapshot-4.db has
+115 maker fills with exchange-reported fees. The split is perfectly clean and
+matches the table 15/15: KXCPI, KXFED, KXCPIYOY (in-table, maker=1) were
+charged round_up_centicent(0.0175 x C x P x (1-P)) EXACTLY, per fill; all 12
+absent-from-table series (KXGTEMP, KXMUSKNW, KXAAAGASMAX, ...) were charged
+zero. The earlier "~0.0189" was the centicent round-UP inflating the implied
+rate on small fills of IN-TABLE series, not a different rate, and not fees on
+absent series. So the schedule reading stands: **the 15M series pay no maker
+fee, and KXBTC15M passive quoting is +0.278c/contract gross.** The remaining
+blocker is assumption 2 below (the fantasy fill rate), which is now the ONLY
+open question. fees.py encodes the confirmed model as of this date.
+
 ### Conclusion
 
 Do not build this on the strength of the +0.278c. Every assumption underneath it
@@ -202,8 +214,10 @@ Two cheap decisive tests, in order:
 
 - **Settle the fee question for about $2.** Rest one small order in KXBTC15M,
   let it fill, read the reported `fee_cost`. Binary answer, ends the ambiguity.
+  *(DONE 2026-08-06 without a trade, see RESOLVED note above: our existing
+  fills confirm the table. Assumption 1 is retired.)*
 - **Then measure real fill rate and its selection bias** by quoting minimum size
   in KXBTC15M only, for a few days, and comparing achieved fills against the
-  98.7% assumed here.
+  98.7% assumed here. *(Now the only open question.)*
 
-Both use the bot as built. Neither is a rewrite. If the fee is nonzero, stop.
+Both use the bot as built. Neither is a rewrite.

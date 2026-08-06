@@ -152,14 +152,21 @@ Implemented from REVIEW-2026-07-17.md §4 P1 table. 172 tests passing. Branch
   batch path). `close()` drains + checkpoints WAL. Retention:
   `logging.events_keep_days: 14` prunes ONLY the SQLite events table at
   startup + daily; JSONL files are the archive, all other tables are forever.
-- **Fee model** (`fees.py`): Kalshi schedule = ceil(0.07 × C × P × (1−P)) to
-  the cent, taker-only (kalshi.com/docs/kalshi-fee-schedule.pdf). The ws fill
-  payload's `fee_cost` is preferred (`fee_source: reported`), formula is the
-  fallback (`computed`). risk books `cash -= fee` (PnL, high-water, kill
-  switch are now net-of-fee); fills table has a `fee` column with a migration
-  applied by both EventLog and analyze on open. `analyze markouts` reports
-  gross AND net — **net is the S2-gate number**. Quoting spreads are still
-  gross by design; fee-aware sizing is a policy decision for the S1→S2 review.
+- **Fee model** (`fees.py`, reworked 2026-08-06 against the schedule effective
+  2026-07-07): taker = round-up-to-CENTICENT(0.07 × C × P × (1−P)); maker =
+  same shape at 0.0175 but ONLY for the ~76 series in the schedule's
+  "Non-Standard Fees" table (`MAKER_FEE_SERIES`) — series absent from the
+  table pay NO maker fee, and 10 series are fee-free both sides. Confirmed
+  15/15 against our own exchange-reported fills (fly-snapshot-4.db); the old
+  "~0.0189 maker rate" was centicent round-up on small in-table fills. The ws
+  fill payload's `fee_cost` is preferred (`fee_source: reported` — in practice
+  every live fill has carried it), formula is the fallback (`computed`, takes
+  a `series=` kwarg; None charges maker_rate, deliberately conservative). risk
+  books `cash -= fee` (PnL, high-water, kill switch are net-of-fee); fills
+  table has a `fee` column with a migration applied by EventLog on open.
+  `analyze markouts` reports gross AND net — **net is the S2-gate number**.
+  Quoting spreads are still gross by design; fee-aware sizing is a policy
+  decision for the S1→S2 review.
 - **Settlement & close**: `marks_loop` writes marks every
   `marks_tick_seconds: 60` even without book deltas; `close_reaper_hours: 12`
   pulls quotes and stops re-quoting (positions route to wind-down);

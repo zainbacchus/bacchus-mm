@@ -17,7 +17,7 @@ from bacchus_mm.exchange.kalshi import KalshiExchange
 from bacchus_mm.fees import FeeSchedule, compute_fee
 from bacchus_mm.risk import RiskManager, RiskParams
 
-KALSHI = FeeSchedule()  # kalshi_v1, taker 0.07, maker 0
+KALSHI = FeeSchedule()  # kalshi_v1, taker 0.07, maker 0.0175 (in-table series)
 
 
 # ------------------------------------------------------------- the formula
@@ -32,20 +32,50 @@ def test_fee_formula_parabola_shape():
     assert mid > wing
 
 
-def test_fee_rounds_up_to_next_cent():
-    # 0.07 x 3 x 0.25 = $0.0525 -> $0.06; Kalshi rounds each trade UP.
-    assert compute_fee(KALSHI, 3, Decimal("0.5"), True) == Decimal("0.06")
-    # ...so even a 1-contract taker fill pays a minimum cent.
-    assert compute_fee(KALSHI, 1, Decimal("0.5"), True) == Decimal("0.02")
-    assert compute_fee(KALSHI, 1, Decimal("0.01"), True) == Decimal("0.01")
+def test_fee_rounds_up_to_next_centicent():
+    # Schedule effective 2026-07-07: round UP to a CENTICENT ($0.0001), not a
+    # cent. 0.07 x 3 x 0.25 = $0.0525 exactly — no rounding needed.
+    assert compute_fee(KALSHI, 3, Decimal("0.5"), True) == Decimal("0.0525")
+    # 0.07 x 1 x 0.25 = $0.0175 — the old cent rounding booked $0.02 (+14%).
+    assert compute_fee(KALSHI, 1, Decimal("0.5"), True) == Decimal("0.0175")
+    # 0.07 x 1 x 0.01 x 0.99 = $0.000693 -> up to $0.0007.
+    assert compute_fee(KALSHI, 1, Decimal("0.01"), True) == Decimal("0.0007")
 
 
-def test_fee_maker_zero_and_none_formula():
-    assert compute_fee(KALSHI, 100, Decimal("0.5"), False) == Decimal("0")
+def test_fee_maker_table_membership_decides():
+    # In-table series (KXFED is maker=1 in the Non-Standard Fees table) pay
+    # 0.0175; series absent from the table pay NOTHING as makers.
+    assert compute_fee(KALSHI, 100, Decimal("0.5"), False, series="KXFED") == Decimal("0.4375")
+    assert compute_fee(KALSHI, 100, Decimal("0.5"), False, series="KXGTEMP") == Decimal("0")
+    assert compute_fee(KALSHI, 100, Decimal("0.5"), False, series="KXBTC15M") == Decimal("0")
+    # Unknown series (None): charge — conservative, overstates fees so PnL is
+    # understated and the kill switch errs early.
+    assert compute_fee(KALSHI, 100, Decimal("0.5"), False) == Decimal("0.4375")
     none_sched = FeeSchedule(formula="none")
     assert compute_fee(none_sched, 100, Decimal("0.5"), True) == Decimal("0")
-    maker_sched = FeeSchedule(maker_rate=Decimal("0.0175"))
-    assert compute_fee(maker_sched, 100, Decimal("0.5"), False) == Decimal("0.44")
+
+
+def test_fee_matches_exchange_reported_maker_fills():
+    # Regression anchors: four real fills from data/fly-snapshot-4.db where
+    # the ws payload carried the exchange's own fee_cost. The formula must
+    # reproduce them exactly (in-table series, centicent round-up).
+    assert compute_fee(KALSHI, 2, Decimal("0.67"), False, series="KXCPI") == Decimal("0.0078")
+    assert compute_fee(KALSHI, 1, Decimal("0.57"), False, series="KXCPI") == Decimal("0.0043")
+    assert compute_fee(KALSHI, 2, Decimal("0.12"), False, series="KXFED") == Decimal("0.0037")
+    assert compute_fee(KALSHI, 2, Decimal("0.47"), False, series="KXFED") == Decimal("0.0088")
+
+
+def test_fee_free_series_pay_nothing_either_side():
+    assert compute_fee(KALSHI, 100, Decimal("0.5"), True, series="KXBTCY") == Decimal("0")
+    assert compute_fee(KALSHI, 100, Decimal("0.5"), False, series="KXBTCY") == Decimal("0")
+
+
+def test_series_of():
+    from bacchus_mm.fees import series_of
+
+    assert series_of("KXFED-26SEP-T4.00") == "KXFED"
+    assert series_of("KXGTEMP-26-P0") == "KXGTEMP"
+    assert series_of("") == ""
 
 
 def test_fee_unknown_formula_raises():
@@ -204,15 +234,16 @@ async def _one_fill(messages, schedule):
 @pytest.mark.asyncio
 async def test_adapter_prefers_reported_fee_cost():
     f = await _one_fill([_fill_msg(fee_cost="0.04")], KALSHI)
-    # Reported wins over the formula (which would give $0.09 for 5 @ 0.48 taker).
+    # Reported wins over the formula (which would give $0.0874 for 5 @ 0.48 taker).
     assert f.fee == Decimal("0.04") and f.fee_source == "reported"
 
 
 @pytest.mark.asyncio
 async def test_adapter_computes_fee_when_payload_lacks_it():
     f = await _one_fill([_fill_msg()], KALSHI)
-    # ceil(0.07 x 5 x 0.48 x 0.52 x 100)/100 = ceil(8.736)/100 = $0.09
-    assert f.fee == Decimal("0.09") and f.fee_source == "computed"
+    # 0.07 x 5 x 0.48 x 0.52 = $0.08736 -> centicent round-up $0.0874 (taker;
+    # the ticker's series is irrelevant on the taker side unless fee-free).
+    assert f.fee == Decimal("0.0874") and f.fee_source == "computed"
 
 
 @pytest.mark.asyncio

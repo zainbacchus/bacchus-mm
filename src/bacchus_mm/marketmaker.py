@@ -425,9 +425,10 @@ class MarketWorker:
         schedule = getattr(self.exchange, "fee_schedule", None)
         if schedule is None:
             return True  # no fee model configured: crossing costs nothing extra
-        from .fees import compute_fee
+        from .fees import compute_fee, series_of
 
-        fee = compute_fee(schedule, size, price, is_taker=True)
+        fee = compute_fee(schedule, size, price, is_taker=True,
+                          series=series_of(self.ticker))
         return fee <= self._winddown_adverse * abs(size)
 
     async def run(self) -> None:
