@@ -1,5 +1,59 @@
 # Roadmap
 
+## Current status (2026-08-06)
+
+Calm-market MM is CONCLUDED with a measured negative edge (see
+research/RETRO-CALM-MM-2026-08-06.md); the selector is wound down. Phases B
+and C below are RETIRED with it (they were signal/execution add-ons to the
+calm-market thesis). The active work is Phase D.
+
+## Phase D — 15-minute markets measurement (ACTIVE)
+
+Goal (owner, 2026-08-06): test whether passive MM on the 15-minute up/down
+markets can return at least 2x the risk-free rate annualized on $500-$20K.
+
+Why this survived every other idea (research/ARB-AND-15MIN-STUDY-2026-08-06.md):
+these are pure return bets (target fixed at open), fair value is computable,
+the family runs ~190M contracts/day, and the fee model confirmed 2026-08-06
+says NO maker fee on any 15M series. Measured conditional edge joining the
+touch: BTC +0.278c/contract gross, GOLD +0.060c; ETH/SOL/SILVER/NEAR negative;
+DOGE/BNB/HYPE unmeasured. The one untested assumption is FILL RATE: the study
+counted a fill whenever price traded through our level (98.7% for BTC), but
+real queue position on a 2M-contract book will deliver less, selected against
+us. That number cannot be simulated; it must be measured live.
+
+The capital target math: risk-free ~4%, so 2x is ~8%/yr. On $500 that is
+~11c/day (~40 BTC-contracts/day at +0.278c); on $20K, ~$4.40/day (~1,600
+contracts/day, ~0.001% of series volume). Capital is not the binding
+constraint; measured net edge at OUR queue position is.
+
+Build (mode `fifteen`, keeps the calm-MM path intact for the record):
+
+1. Static 15M universe, no selector: all nine series (KXBTC15M, KXETH15M,
+   KXSOL15M, KXDOGE15M, KXBNB15M, KXHYPE15M, KXNEAR15M, KXGOLD15M,
+   KXSILVER15M). Roll worker: discover the open window's market per series
+   via /events, spawn worker at open, next window on close.
+2. Sub-cent ticks: strategy.tick 0.001 (config; _fmt_price already sends 4dp).
+   Verify each series' price_ranges step at discovery and refuse to quote a
+   structure we do not understand.
+3. Timing at seconds granularity: quote from open to T-75s, then cancel all
+   (the last 60s is the settlement averaging window; quoting into it is a
+   pure gift). Bypass close_reaper/min_hours_to_close for this mode. Hold
+   fills to settlement (defined risk, <= $1/contract); the existing
+   settlement poll realizes it.
+4. Strategy: join-the-touch only, 1 contract per side per series (measurement
+   size). No A-S reservation pricing: the model study proved the book's mid
+   beats our model at every minute, so we do not price, we join. Inventory
+   cap per series ~5; kill switch stays.
+5. Instrumentation is the point: per-series achieved fill rate vs the study's
+   trade-through rate, conditional net edge per fill vs settlement, queue
+   position proxy (our price level's resting depth at join). Existing
+   eventlog unchanged.
+6. Go/no-go after ~1 week per series: measured net c/contract > 0 with CI
+   excluding zero -> scale size on that series and recompute the annualized
+   return on capital actually deployed; else drop the series. If all nine
+   fail, the project concludes with the full map of why.
+
 ## Done
 
 - **Kalshi MM core** — A-S quoting, websocket data, risk stack, decision logs.
@@ -28,7 +82,7 @@
   can share the account); Dockerfile + fly.toml + health endpoint +
   docs/deploy.md runbook (~$2.10/mo). 172 tests. See CLAUDE.md P1 section.
 
-## Phase B — Polymarket as a fair-value signal (future)
+## Phase B — Polymarket as a fair-value signal (RETIRED 2026-08-06 with the calm-market thesis)
 
 Feed the Polymarket mid into Kalshi quoting for mapped markets:
 - shift the reservation price toward a volume-weighted blend of both venues;
@@ -38,7 +92,7 @@ Feed the Polymarket mid into Kalshi quoting for mapped markets:
 Gate: `analyze divergence` shows divergence episodes are common enough to
 matter and Kalshi is the laggard often enough to exploit defensively.
 
-## Phase C — Polymarket execution (future, needs its own risk review)
+## Phase C — Polymarket execution (RETIRED 2026-08-06 with the calm-market thesis)
 
 Spread survey 2026-07-15: PM's econ-adjacent books are TIGHTER than ours
 (0.1-1c spreads, 0.1-0.25c ticks, mature MM ecosystem + liquidity rewards,

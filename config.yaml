@@ -40,11 +40,17 @@ exchange:
   settlement_poll_seconds: 900
 
 selector:
-  # Calm categories only: news-driven categories (sports, crypto prices) will
-  # pick off a slow market maker. Category names must match Kalshi series categories.
+  # 2026-08-06 WIND-DOWN (owner decision): the calm-market MM experiment is
+  # concluded (see research/RETRO-CALM-MM-2026-08-06.md). The sentinel
+  # category below matches nothing, so the bot selects NO new markets; held
+  # positions are picked up as reduce-only wind-down workers at startup and
+  # exited. NOTE an empty list would match ALL categories (selector.py treats
+  # empty as "no filter"), hence the sentinel. live.enabled stays true so the
+  # wind-down workers can place their exit orders.
+  # Next phase: 15-minute markets measurement, see ROADMAP Phase D.
   categories:
-    - Economics
-    - Climate and Weather
+    - WINDDOWN-SENTINEL-NO-SUCH-CATEGORY
+  # (previous live selection: Economics, Climate and Weather)
   # 2026-07-24: tuning promoted from config.local.yaml into the COMMITTED
   # config so the fly image actually gets it — config.local.yaml is gitignored
   # and never reached the container, so fly had been running these loose
