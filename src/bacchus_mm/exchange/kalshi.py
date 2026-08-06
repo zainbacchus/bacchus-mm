@@ -570,6 +570,15 @@ class KalshiExchange(ExchangeAdapter):
         backoff = 1.0
         while True:
             tickers = get_tickers()
+            if not tickers:
+                # 2026-08-06: subscribing orderbook_delta with an empty
+                # market_tickers list gets a ws error ('Params required',
+                # code 2) — seen at fifteen-mode boot, before discovery has
+                # spawned the first windows. Wait for a roster instead of
+                # sending a subscribe Kalshi will reject.
+                self._resubscribe = False
+                await asyncio.sleep(2)
+                continue
             books: dict[str, OrderBook] = {t: OrderBook(t) for t in tickers}
             # 2026-08-06 (Phase D): expose the live books for book_levels().
             self._books = books

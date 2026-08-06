@@ -172,7 +172,14 @@ risk:
   max_contracts_per_market: 10
   max_notional_per_market: 100 # dollars of worst-case exposure per market
   max_gross_notional: 600 # dollars across all markets
-  kill_switch_drawdown: 10 # ~8x worst observed drawdown; tiny bankroll protection (was 250)
+  # 2026-08-06 (owner decision, Phase D measurement): 10 -> 30. The $10 budget
+  # tripped on the first live fifteen cycle at -$11.56 MARKED while settled
+  # reality was -$3.43 — near-expiry marks on ~45 gross contracts swing $3-5
+  # per window cycle even at zero true edge, and every false trip costs
+  # measurement time plus a manual halt-clear. $30 is ~6% of the bankroll and
+  # still caps the whole experiment at pocket money. halt-clear rebases the
+  # high-water mark, so the budget is $30 from the re-arm point.
+  kill_switch_drawdown: 30
   order_group_contracts_per_15s: 40 # exchange-side runaway limit (Kalshi order group)
   # 2026-07-17 (M5): on prod+live, failure to create the order group (safety
   # layer 4, the exchange-side runaway guard) ABORTS startup. Setting this
