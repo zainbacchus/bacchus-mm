@@ -58,28 +58,28 @@ verification that flipped the current strategy from marginal to viable.
 
 ## How it works
 
-- **Window discovery (fifteen)** — polls each configured series for its open
+- **Window discovery (fifteen)**: polls each configured series for its open
   15-minute window, validates the price grid (the crypto series use a
   piecewise tick: 0.001 in the tails, 0.01 in the middle), spawns a quoting
   worker per window, retires it after close.
-- **Quoting** — join-the-touch at measurement size. The A-S model, EWMA
+- **Quoting**: join-the-touch at measurement size. The A-S model, EWMA
   volatility, and fast-move guard still exist for the legacy path but are
   deliberately out of the fifteen loop.
-- **Market data** — Kalshi websocket (`orderbook_delta` + `fill` channels);
+- **Market data**: Kalshi websocket (`orderbook_delta` + `fill` channels);
   the bot re-quotes on book changes, throttled per market, with full local
   books so it can tell "the bid" from "our bid".
-- **Risk** — per-market and gross caps checked before every order; a
+- **Risk**: per-market and gross caps checked before every order; a
   drawdown kill switch that cancels everything, writes a `HALTED` marker,
   and refuses to restart until you acknowledge with `halt-clear`; plus a
   Kalshi order-group so the *exchange* cancels all orders if fills exceed a
   rolling 15-second contract limit (protection that works even if the bot
   is wedged).
-- **Fees** — modeled per series from Kalshi's published schedule and
+- **Fees**: modeled per series from Kalshi's published schedule and
   verified against exchange-reported fills: taker 0.07 x C x P x (1-P)
   rounded up to a centicent; maker 0.0175 on ~76 listed series and **zero
   everywhere else**, including every 15-minute series. The websocket's own
   `fee_cost` is always preferred over the model.
-- **Logs** — JSONL event stream + SQLite mirror in `data/`: every quote
+- **Logs**: JSONL event stream + SQLite mirror in `data/`: every quote
   decision (book top, inventory, queue depth at the joined level), order
   event, fill (with mid-at-fill), mid marks, and a PnL curve.
   `bacchus-mm analyze markouts` computes post-fill drift; for 15-minute
@@ -133,21 +133,21 @@ loaded at all.
 
 ## Safety model
 
-1. Post-only orders — a quote that would cross is rejected, never a taker fill.
-2. Client-side caps — per-market contracts, per-market notional, gross notional.
-3. Kill switch — drawdown from the ACCOUNT-equity high-water mark (chained
+1. Post-only orders: a quote that would cross is rejected, never a taker fill.
+2. Client-side caps: per-market contracts, per-market notional, gross notional.
+3. Kill switch: drawdown from the ACCOUNT-equity high-water mark (chained
    across sessions) ≥ threshold → cancel all, halt. `halt-clear` re-arms by
    rebasing the high-water mark to current equity: clearing a halt means
    "loss acknowledged; protect me from here."
-4. Exchange-side order group — Kalshi cancels everything if the group trades
+4. Exchange-side order group: Kalshi cancels everything if the group trades
    more than N contracts in any rolling 15s window.
-5. Order TTLs — resting orders expire server-side even if the bot dies.
-6. Settlement-window pull (fifteen) — all quotes canceled 75s before each
+5. Order TTLs: resting orders expire server-side even if the bot dies.
+6. Settlement-window pull (fifteen): all quotes canceled 75s before each
    window closes; the bot never rests an order into the averaging period
    that fixes the settlement value.
-7. Structure gate (fifteen) — a market whose price grid the bot cannot fully
+7. Structure gate (fifteen): a market whose price grid the bot cannot fully
    parse is refused, never quoted.
-8. Startup hygiene — cancels any stale resting orders from previous sessions;
+8. Startup hygiene: cancels any stale resting orders from previous sessions;
    shutdown verifies zero resting orders and says so loudly if not.
 
 ## Honest expectations
