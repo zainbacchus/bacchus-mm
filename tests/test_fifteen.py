@@ -288,6 +288,119 @@ def test_fifteen_series_positions_ride_to_settlement():
     assert series_of("KXFM30YMTG-26DEC31-T5.75") not in fifteen
 
 
+# ---------------------------------------------- fractional-fill residual carry
+
+@pytest.mark.asyncio
+async def test_fractional_fills_carry_residual_not_truncate():
+    """Incident 2026-08-06: 15M books trade fractional contracts; int()
+    truncation per fill dropped them from tracked position, blinding the caps
+    and kill switch. The adapter now carries the residue per ticker."""
+    import asyncio as _a
+
+    import aiohttp
+
+    from bacchus_mm.exchange.kalshi import KalshiExchange
+
+    class _Msg:
+        def __init__(self, payload):
+            self.type = aiohttp.WSMsgType.TEXT
+            import json as _j
+
+            self.data = _j.dumps(payload)
+
+    class _Ws:
+        def __init__(self, msgs):
+            self._m = list(msgs)
+
+        async def send_json(self, obj):
+            pass
+
+        async def receive(self):
+            if self._m:
+                return _Msg(self._m.pop(0))
+            raise _a.CancelledError()
+
+    class _Conn:
+        def __init__(self, ws):
+            self._ws = ws
+
+        async def __aenter__(self):
+            return self._ws
+
+        async def __aexit__(self, *e):
+            return False
+
+    class _Http:
+        def __init__(self, msgs):
+            self._msgs = msgs
+
+        def ws_connect(self, url, headers=None, heartbeat=None):
+            return _Conn(_Ws(self._msgs))
+
+    class _Auth:
+        def headers(self, m, p):
+            return {}
+
+    seq_counter = {"n": 0}
+
+    def fill(count_fp, action="buy", side="yes", tid=None):
+        seq_counter["n"] += 1  # monotone seq: a repeat reads as a gap -> resub loop
+        return {"type": "fill", "sid": 1, "seq": seq_counter["n"], "msg": {
+            "trade_id": tid or f"t{count_fp}{action}", "order_id": "o1",
+            "market_ticker": "KXBTC15M-TEST", "side": side, "action": action,
+            "count_fp": str(count_fp), "yes_price_dollars": "0.5000",
+            "is_taker": False, "ts_ms": 1, "fee_cost": "0",
+        }}
+
+    msgs = [fill("0.40", tid="a"), fill("0.40", tid="b"), fill("0.40", tid="c"),
+            fill("1.00", "sell", tid="d"), fill("0.80", "sell", tid="e")]
+    ex = KalshiExchange(env="demo", auth=_Auth())
+    session = _Http(msgs)
+
+    async def fake_http():
+        return session
+
+    ex._http = fake_http
+    seen = []
+    with pytest.raises(_a.CancelledError):
+        async for _ in ex.stream(lambda: ["KXBTC15M-TEST"], lambda t: None, seen.append):
+            pass
+    await ex.close()
+    # +0.4, +0.4, +0.4 -> emit 0, 0, +1 (carry 0.2); -1.0 -> emit 0 (carry -0.8);
+    # -0.8 -> emit -1 (carry -0.6). Tracked total 0 vs real -0.6: drift < 1.
+    assert [f_.signed_count for f_ in seen] == [0, 0, 1, 0, -1]
+    real = Decimal("0.4") * 3 - Decimal("1.0") - Decimal("0.8")
+    tracked = sum(f_.signed_count for f_ in seen)
+    assert abs(Decimal(tracked) - real) < 1
+
+
+# --------------------------------------------------------- halted-idle behavior
+
+@pytest.mark.asyncio
+async def test_idle_until_halt_cleared(tmp_path):
+    from types import SimpleNamespace as NS
+
+    from bacchus_mm.fifteen import _idle_until_halt_cleared
+
+    halt = tmp_path / "HALTED"
+    halt.write_text("kill switch: test")
+    risk = NS(check_halt_file=lambda: halt.read_text() if halt.exists() else None)
+    stop = __import__("asyncio").Event()
+
+    async def clear_soon():
+        await __import__("asyncio").sleep(0.05)
+        halt.unlink()
+
+    task = __import__("asyncio").create_task(clear_soon())
+    cleared = await _idle_until_halt_cleared(risk, stop, poll_seconds=0.02)
+    await task
+    assert cleared is True
+
+    halt.write_text("again")
+    stop.set()
+    assert await _idle_until_halt_cleared(risk, stop, poll_seconds=0.02) is False
+
+
 # ----------------------------------------------- zero-picks wind-down predicate
 
 def test_wind_down_zero_picks_predicate():

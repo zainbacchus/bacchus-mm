@@ -116,6 +116,20 @@ class FifteenParams:
         )
 
 
+async def _idle_until_halt_cleared(risk, stop: asyncio.Event, poll_seconds: float = 15.0) -> bool:
+    """Wait until the operator removes the HALTED marker (halt-clear) or a
+    stop signal arrives. True = marker gone (restart to trade); False =
+    signaled while still halted."""
+    while not stop.is_set():
+        if not risk.check_halt_file():
+            return True
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=poll_seconds)
+        except asyncio.TimeoutError:
+            pass
+    return not risk.check_halt_file()
+
+
 def _ts(iso: Optional[str]) -> Optional[float]:
     if not iso:
         return None
@@ -231,10 +245,33 @@ async def run_fifteen(cfg: Config, live: bool, dry_run: bool) -> None:
 
     prior_halt = risk.check_halt_file()
     if prior_halt and not dry_run:
-        sys.exit(
-            f"HALTED marker present from a previous kill-switch trip:\n  {prior_halt}\n"
-            "Review data/ logs, then run `bacchus-mm halt-clear` to re-arm."
+        # 2026-08-06 incident: on fly, sys.exit here crash-looped the machine
+        # every ~15 min (restart policy "always") and the ~5s uptime window
+        # made `fly ssh console -C "bacchus-mm halt-clear"` impossible. IDLE
+        # instead: keep the process (and ssh) alive, poll for the operator
+        # removing the marker via halt-clear, then exit 0 for a clean fresh
+        # boot. The halt itself still requires the deliberate human action —
+        # nothing auto-clears.
+        log.error(
+            "HALTED marker present from a previous kill-switch trip:\n  %s\n"
+            "Idling (no orders will be placed). Run "
+            "`bacchus-mm --root /app halt-clear` (fly: via ssh console) to re-arm; "
+            "this process exits for a clean restart once the marker is gone.",
+            prior_halt,
         )
+        events.emit("halted_idle", reason=prior_halt)
+        idle_stop = asyncio.Event()
+        idle_loop = asyncio.get_running_loop()
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            idle_loop.add_signal_handler(sig, idle_stop.set)
+        cleared = await _idle_until_halt_cleared(risk, idle_stop)
+        events.emit("halted_idle_end", cleared=cleared)
+        events.close()
+        await ex.close()
+        if cleared:
+            log.error("halt marker cleared; exiting 0 for a clean restart")
+            sys.exit(0)
+        return  # stopped by signal while still halted
 
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()

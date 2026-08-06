@@ -226,6 +226,10 @@ class KalshiExchange(ExchangeAdapter):
         # touch EXCLUDING our own resting order (joining our own quote would
         # walk the book down one tick per requote).
         self._books: dict[str, OrderBook] = {}
+        # 2026-08-06 (Phase D incident): per-ticker fractional-fill residue —
+        # see the fill branch in stream(). Survives reconnects on purpose
+        # (the residue is position truth, not connection state).
+        self._fill_residual: dict[str, Decimal] = {}
         # 2026-07-17 (C1): the exchange-global trading_paused_until backoff is
         # gone — per-market suspension (worker) + sweep cooloff (QuotingGate)
         # replaced it; see marketmaker.py.
@@ -643,7 +647,28 @@ class KalshiExchange(ExchangeAdapter):
                                 _dispatch(on_book_top, book.top())
                         elif mtype == "fill":
                             m = msg["msg"]
-                            count = int(Decimal(str(m.get("count_fp") or m.get("count") or 0)))
+                            tkr = m.get("market_ticker", "")
+                            count_fp = Decimal(str(m.get("count_fp") or m.get("count") or 0))
+                            # 2026-08-06 (Phase D incident): the 15M books trade
+                            # FRACTIONAL contracts, and truncating each fill to
+                            # int dropped up to a contract per fill from tracked
+                            # position (seen live: "FILL ... +0 @ 0.56"), letting
+                            # real inventory drift away from what the caps and
+                            # kill switch see. Carry the fractional residue per
+                            # ticker and emit whole contracts as they
+                            # accumulate: tracked drift is now bounded < 1
+                            # contract per market. (The carried fraction books
+                            # its basis at the price of the fill that tips it
+                            # over — an error bounded by one tick's worth of a
+                            # sub-contract, accepted for integer risk state.)
+                            long_yes = (m.get("side", "yes") == "yes") == (
+                                m.get("action", "buy") == "buy"
+                            )
+                            signed_fp = count_fp if long_yes else -count_fp
+                            resid = self._fill_residual.get(tkr, Decimal(0)) + signed_fp
+                            signed = int(resid)  # toward zero
+                            self._fill_residual[tkr] = resid - signed
+                            count = abs(signed)
                             yp = _dec(m.get("yes_price_dollars"))
                             if yp is None and m.get("yes_price") is not None:
                                 yp = Decimal(m["yes_price"]) / 100
@@ -686,9 +711,7 @@ class KalshiExchange(ExchangeAdapter):
                                     trade_id=m.get("trade_id", ""),
                                     order_id=m.get("order_id", ""),
                                     ticker=m.get("market_ticker", ""),
-                                    signed_count=fill_signed_count(
-                                        m.get("side", "yes"), m.get("action", "buy"), count
-                                    ),
+                                    signed_count=signed,
                                     yes_price=yp or Decimal(0),
                                     is_taker=bool(m.get("is_taker")),
                                     ts_ms=m.get("ts_ms") or int(time.time() * 1000),
