@@ -55,9 +55,13 @@ kill_timeout = 60
   policy = "always"
 
 [[vm]]
-  size = "shared-cpu-1x"
-  memory = "512mb"   # 2026-07-19: after the scan memory fix (raw payloads no longer retained; ~150MB peak) 512mb has ~3x headroom
-                     # spikes past it → crash loop); ~100MB steady state.
+  # 2026-08-06 (Phase D): shared-cpu-1x starved the event loop under the
+  # 15-minute-market firehose — REST creates timing out ("outcome unknown")
+  # and /health missing fly's probe deadline, both at once. Owner scaled the
+  # machine live; this pin matches it so a redeploy doesn't silently
+  # downgrade back.
+  size = "shared-cpu-2x"
+  memory = "1024mb"
 
 # SQLite (bacchus.db) + JSONL logs live here and survive redeploys/crashes.
 # Create once, SAME REGION as primary_region:

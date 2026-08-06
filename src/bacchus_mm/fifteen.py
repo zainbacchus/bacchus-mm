@@ -315,7 +315,10 @@ async def run_fifteen(cfg: Config, live: bool, dry_run: bool) -> None:
             requote_min_interval=p.requote_min_interval,
             requote_tolerance=p.requote_tolerance,
             order_ttl_seconds=p.order_ttl_seconds,
-            mid_mark_interval=5.0,
+            # 15s (was 5s): mids are also written by marks_tick and at every
+            # quote change; 5s tripled the row rate for no analytical gain and
+            # fed the event-loop starvation seen in the first live hour.
+            mid_mark_interval=15.0,
             fast_move_threshold=Decimal("9"),
             guard_evict_trips=10_000,
             join_touch_only=True,
