@@ -1,5 +1,9 @@
 # Daily ledger
 
+Columns: fills = individual executions; markets = distinct
+15-minute windows traded (each window is its own market with its
+own ticker); contracts = total quantity across fills (fractional).
+
 Definitions in research/daily_review.py build_ledger(). Realized
 PnL is settled-only, attributed to the fill's UTC day; the daily
 rebuild folds late settlements in. Full history: LEDGER.csv.
@@ -8,11 +12,8 @@ let counterparties trade dollar amounts (e.g. $5 at 37c = 13.51
 contracts), so whole-contract orders fill in pieces.
 
 All fills should be MAKER fills (post-only bot): the taker
-columns are tripwires - nonzero means a post-only breach OR a
-manual trade on the shared account. The single lifetime taker
-fill (2026-08-06) was attributed to a manual owner trade from
-the Kalshi app during that night's halt; bot fills are 100%
-maker. Details in build_ledger()'s docstring.
+columns are tripwires, and any nonzero value is an invariant
+breach to treat as an incident.
 
 | date | fills | taker | markets | contracts | volume $ | cum volume $ | fees $ | cum fees $ | taker fees $ | pnl $ | cum pnl $ |
 |---|---|---|---|---|---|---|---|---|---|---|---|

@@ -258,6 +258,9 @@ def build_ledger(all_fills: list, results: dict, ledger_days: int,
 
 def render_ledger_md(ordered: list[dict], dest_md: Path, tail: int = 30) -> None:
     out = ["# Daily ledger", "",
+           "Columns: fills = individual executions; markets = distinct",
+           "15-minute windows traded (each window is its own market with its",
+           "own ticker); contracts = total quantity across fills (fractional).", "",
            "Definitions in research/daily_review.py build_ledger(). Realized",
            "PnL is settled-only, attributed to the fill's UTC day; the daily",
            "rebuild folds late settlements in. Full history: LEDGER.csv.",
