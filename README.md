@@ -117,9 +117,10 @@ checkpoints and runs daily:
    produces explicit HOLDs, not tweaks.
 3. **A running ledger** lives at
    [research/daily/LEDGER.md](research/daily/LEDGER.md): one row per UTC day
-   with trades, markets, contracts, dollar volume, fees, settled PnL, and an
-   equity stamp, rebuilt idempotently every morning back to the account's
-   first fill.
+   of bot performance (trades, markets, contracts, dollar volume, fees,
+   settled PnL), rebuilt idempotently every morning back to the account's
+   first fill. Account equity deliberately lives in the review files
+   instead, where the daily balance-vs-PnL reconciliation check reads it.
 4. **A human merges and deploys.** Review PRs that only record the day merge
    on sight; a PR carrying a PROPOSAL commit changes `config.yaml` and takes
    effect only after the owner merges AND redeploys. Nothing reaches the

@@ -132,11 +132,11 @@ def close_ts_from_ticker(tk: str):
     return None
 
 
-def build_ledger(all_fills: list, results: dict, equity_today, ledger_days: int,
+def build_ledger(all_fills: list, results: dict, ledger_days: int,
                  dest_csv: Path) -> list[dict]:
     """Daily accounting ledger (2026-08-07, owner request): one row per UTC
     day — fills, distinct markets, contracts, $ volume, $ fees, settled
-    realized PnL, cumulative PnL, and an equity stamp.
+    realized PnL, and cumulative PnL.
 
     Definitions (documented here because accounting arguments are eternal):
       volume_usd   = sum(contracts x price_paid) — the cash outlay side of
@@ -146,9 +146,16 @@ def build_ledger(all_fills: list, results: dict, equity_today, ledger_days: int,
                      (not the settle day); fills whose market has not
                      settled yet are counted in volume/fees but not PnL —
                      the daily rebuild folds them in once they settle.
-      equity_usd   = balance + open positions, stamped only on the day the
-                     script runs (it is an observation, not reconstructable
-                     history). Existing stamps are preserved on rebuild.
+    Equity is deliberately NOT a ledger column (owner decision 2026-08-07:
+    the ledger tracks BOT performance; account equity lives in the daily
+    REVIEW files, where the balance-vs-settled-PnL reconciliation check
+    reads it).
+
+    Contracts can be FRACTIONAL: Kalshi's 15-minute markets trade in
+    fractional contracts (counterparties can submit dollar amounts, e.g.
+    $5 at 37c = 13.51 contracts), so our whole-contract orders can fill in
+    pieces - a 0.4-contract fill is real, and the bot carries the residue
+    (see kalshi.py fill handling).
 
     Idempotent: rows inside the rebuild window are recomputed from the API;
     rows older than the window are preserved verbatim from the existing CSV.
@@ -156,7 +163,7 @@ def build_ledger(all_fills: list, results: dict, equity_today, ledger_days: int,
     existing: dict[str, dict] = {}
     header = ["date", "fills", "markets", "contracts", "settled_contracts",
               "volume_usd", "fees_usd", "realized_pnl_usd",
-              "cum_realized_pnl_usd", "equity_usd"]
+              "cum_realized_pnl_usd"]
     if dest_csv.exists():
         lines = dest_csv.read_text().strip().splitlines()
         for line in lines[1:]:
@@ -164,7 +171,6 @@ def build_ledger(all_fills: list, results: dict, equity_today, ledger_days: int,
             if parts and parts[0]:
                 existing[parts[0]] = dict(zip(header, parts))
 
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     window_start = datetime.now(timezone.utc).timestamp() - ledger_days * 86400
     days: dict[str, dict] = collections.defaultdict(
         lambda: dict(fills=0, markets=set(), contracts=0.0, settled_ct=0.0,
@@ -212,10 +218,6 @@ def build_ledger(all_fills: list, results: dict, equity_today, ledger_days: int,
             "fees_usd": f"{d['fees']:.4f}",
             "realized_pnl_usd": f"{d['pnl']:.2f}",
             "cum_realized_pnl_usd": "",  # filled below
-            # preserve any prior equity stamp; today gets a fresh one
-            "equity_usd": (existing.get(day, {}).get("equity_usd", "")
-                           if day != today else
-                           (f"{equity_today:.2f}" if equity_today is not None else "")),
         }
     cum = 0.0
     ordered = [rows[k] for k in sorted(rows)]
@@ -232,17 +234,19 @@ def build_ledger(all_fills: list, results: dict, equity_today, ledger_days: int,
 
 def render_ledger_md(ordered: list[dict], dest_md: Path, tail: int = 30) -> None:
     out = ["# Daily ledger", "",
-           "Definitions in research/daily_review.py build_ledger(). realized",
+           "Definitions in research/daily_review.py build_ledger(). Realized",
            "PnL is settled-only, attributed to the fill's UTC day; the daily",
-           "rebuild folds late settlements in. Full history: LEDGER.csv.", "",
-           "| date | fills | markets | contracts | volume $ | fees $ | pnl $ | cum pnl $ | equity $ |",
-           "|---|---|---|---|---|---|---|---|---|"]
+           "rebuild folds late settlements in. Full history: LEDGER.csv.",
+           "Note: contracts can be fractional - Kalshi's 15-minute markets",
+           "let counterparties trade dollar amounts (e.g. $5 at 37c = 13.51",
+           "contracts), so whole-contract orders fill in pieces.", "",
+           "| date | fills | markets | contracts | volume $ | fees $ | pnl $ | cum pnl $ |",
+           "|---|---|---|---|---|---|---|---|"]
     for r in ordered[-tail:]:
         out.append(
             f"| {r['date']} | {r['fills']} | {r['markets']} | {r['contracts']} "
             f"| {float(r['volume_usd']):,.2f} | {r['fees_usd']} "
-            f"| {float(r['realized_pnl_usd']):+.2f} | {float(r['cum_realized_pnl_usd']):+.2f} "
-            f"| {r['equity_usd'] or '-'} |")
+            f"| {float(r['realized_pnl_usd']):+.2f} | {float(r['cum_realized_pnl_usd']):+.2f} |")
     out.append("")
     dest_md.write_text("\n".join(out))
 
@@ -357,9 +361,8 @@ def main() -> None:
                 break
 
     # ---- daily accounting ledger (2026-08-07): full-account time series.
-    equity_today = (balance + portfolio_cents / 100) if balance is not None else None
     ledger_rows = build_ledger(
-        all_fills, results, equity_today, args.ledger_days,
+        all_fills, results, args.ledger_days,
         Path(__file__).resolve().parent / "daily" / "LEDGER.csv",
     )
     render_ledger_md(ledger_rows,
