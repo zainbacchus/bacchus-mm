@@ -182,6 +182,44 @@ class FifteenParams:
         )
 
 
+def start_stall_watchdog(
+    loop_thread_id: int,
+    beat: dict,
+    threshold: float = 1.5,
+    interval: float = 0.25,
+    report_every: float = 10.0,
+):
+    """2026-08-07 stall investigation, stage 2. The loop_lag probe PROVED the
+    event loop freezes for seconds at a time (it can only report afterwards);
+    this watchdog runs on a separate THREAD, watches the probe's heartbeat,
+    and the moment the loop goes silent it samples the main thread's stack
+    via sys._current_frames() — an in-process py-spy. The offending frame of
+    the next stall lands in the log verbatim. Log-only from the thread (the
+    EventLog is not thread-safe); logging itself is queue-based/non-blocking.
+    """
+    import threading
+    import traceback
+
+    def watch():
+        last_report = 0.0
+        while True:
+            time.sleep(interval)
+            silent = time.monotonic() - beat["t"]
+            if silent > threshold and time.monotonic() - last_report > report_every:
+                last_report = time.monotonic()
+                frame = sys._current_frames().get(loop_thread_id)
+                if frame is not None:
+                    stack = "".join(traceback.format_stack(frame))
+                    log.warning(
+                        "STALL WATCHDOG: loop silent %.1fs; main-thread stack:\n%s",
+                        silent, stack,
+                    )
+
+    t = threading.Thread(target=watch, daemon=True, name="stall-watchdog")
+    t.start()
+    return t
+
+
 async def _idle_until_halt_cleared(risk, stop: asyncio.Event, poll_seconds: float = 15.0) -> bool:
     """Wait until the operator removes the HALTED marker (halt-clear) or a
     stop signal arrives. True = marker gone (restart to trade); False =
@@ -687,6 +725,13 @@ async def run_fifteen(cfg: Config, live: bool, dry_run: bool) -> None:
                             )
                     await asyncio.sleep(p.spot_poll_seconds)
 
+        # 2026-08-07 stage 2: heartbeat shared with the stall watchdog THREAD,
+        # which stack-samples the loop the moment this goes silent.
+        import threading as _threading
+
+        beat = {"t": time.monotonic()}
+        start_stall_watchdog(_threading.get_ident(), beat)
+
         async def loop_lag_probe():
             """2026-08-07 stall investigation: the decisive discriminator.
             sleep(1) oversleeping means the LOOP itself was frozen (blocked
@@ -696,7 +741,8 @@ async def run_fifteen(cfg: Config, live: bool, dry_run: bool) -> None:
             while not stop_event.is_set():
                 t0 = time.monotonic()
                 await asyncio.sleep(1.0)
-                lag = time.monotonic() - t0 - 1.0
+                beat["t"] = time.monotonic()
+                lag = beat["t"] - t0 - 1.0
                 if lag > 0.5:
                     events.emit("loop_lag", lag_seconds=round(lag, 3))
                     log.warning("event-loop lag %.2fs (loop was blocked)", lag)

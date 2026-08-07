@@ -499,6 +499,31 @@ async def test_idle_until_halt_cleared(tmp_path):
     assert await _idle_until_halt_cleared(risk, stop, poll_seconds=0.02) is False
 
 
+def test_stall_watchdog_samples_blocked_thread(caplog):
+    """Stage-2 stall instrumentation: when the heartbeat goes silent, the
+    watchdog thread must log the watched thread's CURRENT stack, naming the
+    blocking frame."""
+    import logging as _logging
+    import threading
+    import time as _t
+
+    from bacchus_mm.fifteen import start_stall_watchdog
+
+    beat = {"t": _t.monotonic()}
+    start_stall_watchdog(
+        threading.get_ident(), beat, threshold=0.15, interval=0.05, report_every=999,
+    )
+    with caplog.at_level(_logging.WARNING, logger="bacchus_mm.fifteen"):
+        _t.sleep(0.6)  # this very sleep is the "blocking" frame the dog samples
+        for _ in range(20):
+            if any("STALL WATCHDOG" in r.message for r in caplog.records):
+                break
+            _t.sleep(0.05)
+    hits = [r for r in caplog.records if "STALL WATCHDOG" in r.message]
+    assert hits, "watchdog did not report a silent heartbeat"
+    assert "test_stall_watchdog" in hits[0].message, "stack should name the blocked frame"
+
+
 # ----------------------------------------------- zero-picks wind-down predicate
 
 def test_wind_down_zero_picks_predicate():
