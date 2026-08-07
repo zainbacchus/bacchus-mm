@@ -499,6 +499,60 @@ async def test_idle_until_halt_cleared(tmp_path):
     assert await _idle_until_halt_cleared(risk, stop, poll_seconds=0.02) is False
 
 
+def test_guard_monotonic_spread_min_matches_naive():
+    """Watchdog-finding fix: the monotonic deque's front must equal a naive
+    min() over the live window at every step (fuzzed, fixed seed)."""
+    import random
+
+    from bacchus_mm.marketmaker import FastMoveGuard
+
+    rng = random.Random(7)
+    g = FastMoveGuard(D("0.03"), window_s=10.0, cooloff_s=45.0)
+    naive: list[tuple[float, Decimal]] = []
+    t = 1000.0
+    for _ in range(3000):
+        t += rng.random() * 0.5
+        sp = D(rng.randrange(1, 200)) / D(1000)
+        # naive window min BEFORE this update's spread is recorded
+        naive = [(ts, s) for ts, s in naive if t - ts <= 10.0]
+        expected_prev = min((s for _, s in naive), default=None)
+        eff = g._effective_threshold(t)
+        if expected_prev is None:
+            assert eff == g.threshold
+        else:
+            expected = max(g.threshold, g.spread_multiple * expected_prev)
+            assert eff == min(expected, 2 * g.threshold)
+        g._push_spread(t, sp)
+        naive.append((t, sp))
+
+
+def test_orderbook_incremental_best_matches_naive():
+    """Watchdog-finding fix: cached best bid/ask must equal a naive max()
+    after every delta, including removals of the best level (fuzzed)."""
+    import random
+
+    from bacchus_mm.exchange.kalshi import OrderBook
+
+    rng = random.Random(11)
+    b = OrderBook("T")
+    b.apply_snapshot({"yes_dollars_fp": [["0.50", "10"]], "no_dollars_fp": [["0.48", "5"]],
+                      "ts_ms": 1})
+    prices = [D(p) / D(1000) for p in range(400, 600, 5)]
+    for _ in range(4000):
+        side = rng.choice(["yes", "no"])
+        price = rng.choice(prices)
+        book = b.yes_bids if side == "yes" else b.no_bids
+        cur = book.get(price, D(0))
+        # bias toward removal when present so best-level removal happens often
+        delta = -cur if (cur > 0 and rng.random() < 0.4) else D(rng.randrange(1, 20))
+        b.apply_delta({"side": side, "price_dollars": str(price),
+                       "delta_fp": str(delta), "ts_ms": 2})
+        top = b.top()
+        assert top.bid == (max(b.yes_bids) if b.yes_bids else None)
+        naive_no = max(b.no_bids) if b.no_bids else None
+        assert top.ask == ((D(1) - naive_no) if naive_no is not None else None)
+
+
 def test_stall_watchdog_samples_blocked_thread(caplog):
     """Stage-2 stall instrumentation: when the heartbeat goes silent, the
     watchdog thread must log the watched thread's CURRENT stack, naming the

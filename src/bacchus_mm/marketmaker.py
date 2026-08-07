@@ -131,7 +131,15 @@ class FastMoveGuard:
         self.spread_multiple = spread_multiple
         self.confirm_updates = confirm_updates
         self._hist: deque[tuple[float, Decimal]] = deque()
-        self._spread_hist: deque[tuple[float, Decimal]] = deque()
+        # 2026-08-07 (stall watchdog finding): sliding-window MINIMUM via a
+        # monotonic deque (spreads increasing front->back) instead of a full
+        # min() scan per update. The scan was the loop's dominant cost on the
+        # 15M books (hundreds of updates/s x thousands of window entries) —
+        # the watchdog sampled it mid-stall twice. Exactness: an entry popped
+        # from the back is dominated by a NEWER entry with a <= spread that
+        # expires later, so it can never be the window minimum; the front is
+        # therefore always the true min over the live window.
+        self._spread_min: deque[tuple[float, Decimal]] = deque()
         self._blocked_until = 0.0
         # Pending (unconfirmed) move: direction, pre-move reference, steps, opened-at.
         self._pend_dir = 0
@@ -147,14 +155,21 @@ class FastMoveGuard:
     def _effective_threshold(self, now: float) -> Decimal:
         """Scale by the spread that prevailed BEFORE this update (min over the
         window — a shock's own blown-out spread must not raise the bar), and
-        cap at 2x the base threshold so wide books still have a working guard."""
-        while self._spread_hist and now - self._spread_hist[0][0] > self.window:
-            self._spread_hist.popleft()
-        if not self._spread_hist:
+        cap at 2x the base threshold so wide books still have a working guard.
+        O(1): the monotonic deque's front IS the window minimum."""
+        while self._spread_min and now - self._spread_min[0][0] > self.window:
+            self._spread_min.popleft()
+        if not self._spread_min:
             return self.threshold
-        prevailing = min(sp for _, sp in self._spread_hist)
+        prevailing = self._spread_min[0][1]
         eff = max(self.threshold, self.spread_multiple * prevailing)
         return min(eff, 2 * self.threshold)
+
+    def _push_spread(self, now: float, spread: Decimal) -> None:
+        """Monotonic-deque insert: drop dominated entries (older AND wider)."""
+        while self._spread_min and self._spread_min[-1][1] >= spread:
+            self._spread_min.pop()
+        self._spread_min.append((now, spread))
 
     def _clear_pending(self) -> None:
         self._pend_dir, self._pend_ref, self._pend_steps = 0, None, 0
@@ -181,7 +196,7 @@ class FastMoveGuard:
         now = ts if ts is not None else time.monotonic()
         eff = self._effective_threshold(now)  # before recording this update's spread
         if spread is not None:
-            self._spread_hist.append((now, spread))
+            self._push_spread(now, spread)
         last_mid = self._hist[-1][1] if self._hist else mid
         step = mid - last_mid
         self._hist.append((now, mid))

@@ -134,32 +134,52 @@ class TokenBucket:
 
 
 class OrderBook:
-    """Local yes/no bid book maintained from websocket snapshot + deltas."""
+    """Local yes/no bid book maintained from websocket snapshot + deltas.
+
+    2026-08-07 (stall watchdog finding): top() used to max() over every price
+    level on EVERY delta — with the 15M books' delta storms that scan was a
+    major term in event-loop saturation. The best level is now cached and
+    maintained incrementally: adds are O(1); only removing THE best level
+    triggers a rescan (rare relative to at-the-touch churn)."""
 
     def __init__(self, ticker: str):
         self.ticker = ticker
         self.yes_bids: dict[Decimal, Decimal] = {}
         self.no_bids: dict[Decimal, Decimal] = {}
+        self._best_yes: Optional[Decimal] = None
+        self._best_no: Optional[Decimal] = None
         self.ts_ms: int = 0
 
     def apply_snapshot(self, msg: dict) -> None:
         self.yes_bids = {Decimal(p): Decimal(c) for p, c in msg.get("yes_dollars_fp") or []}
         self.no_bids = {Decimal(p): Decimal(c) for p, c in msg.get("no_dollars_fp") or []}
+        self._best_yes = max(self.yes_bids) if self.yes_bids else None
+        self._best_no = max(self.no_bids) if self.no_bids else None
         self.ts_ms = msg.get("ts_ms") or int(time.time() * 1000)
 
     def apply_delta(self, msg: dict) -> None:
-        book = self.yes_bids if msg["side"] == "yes" else self.no_bids
+        yes_side = msg["side"] == "yes"
+        book = self.yes_bids if yes_side else self.no_bids
         price = Decimal(msg["price_dollars"])
         qty = book.get(price, Decimal(0)) + Decimal(msg["delta_fp"])
+        best = self._best_yes if yes_side else self._best_no
         if qty <= 0:
             book.pop(price, None)
+            if best is not None and price == best:
+                best = max(book) if book else None
         else:
             book[price] = qty
+            if best is None or price > best:
+                best = price
+        if yes_side:
+            self._best_yes = best
+        else:
+            self._best_no = best
         self.ts_ms = msg.get("ts_ms") or int(time.time() * 1000)
 
     def top(self) -> BookTop:
-        bid = max(self.yes_bids) if self.yes_bids else None
-        best_no = max(self.no_bids) if self.no_bids else None
+        bid = self._best_yes
+        best_no = self._best_no
         ask = (Decimal(1) - best_no) if best_no is not None else None
         return BookTop(
             ticker=self.ticker,
