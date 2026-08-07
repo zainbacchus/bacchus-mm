@@ -151,16 +151,17 @@ def build_ledger(all_fills: list, results: dict, ledger_days: int,
     REVIEW files, where the balance-vs-settled-PnL reconciliation check
     reads it).
 
-    Maker vs taker: the bot is post-only, so EVERY fill should be a maker
-    fill. The taker_fills and taker_fees_usd columns are TRIPWIRES, not a
-    breakdown: a nonzero value means either a post-only invariant breach OR
-    a manual trade on the shared account, and deserves attribution either
-    way. The tripwire's first-ever scan caught exactly one taker fill
-    (2026-08-06, KXECONSTATCPIYOY, 0.99 contracts, $0.0143 fee): a manual
-    owner trade from the Kalshi app during that night's kill-switch halt -
-    the order id appears nowhere in the bot's event logs, the bot only
-    places whole-contract post-only orders, and it was halted at the time.
-    Bot fills remain 100% maker.
+    Maker vs taker: bot fills are 100% maker by construction (post-only);
+    the daily review output asserts taker == 0 on every run, so the ledger
+    does not carry taker columns (owner decision 2026-08-07). The single
+    lifetime taker fill (2026-08-06, KXECONSTATCPIYOY) was attributed to a
+    manual owner trade from the Kalshi app during that night's halt; the
+    full forensics live in the git history.
+
+    Gross vs net: gross_pnl_usd is settled-outcome PnL before fees (the
+    "spread captured" number for a maker); net_pnl_usd = gross minus the
+    day's TOTAL fees (fees are certain when paid, so they are all charged
+    to net even when some fills have not settled yet).
 
     Contracts can be FRACTIONAL: Kalshi's 15-minute markets trade in
     fractional contracts (counterparties can submit dollar amounts, e.g.
@@ -172,10 +173,9 @@ def build_ledger(all_fills: list, results: dict, ledger_days: int,
     rows older than the window are preserved verbatim from the existing CSV.
     """
     existing: dict[str, dict] = {}
-    header = ["date", "fills", "taker_fills", "markets", "contracts",
-              "settled_contracts", "volume_usd", "cum_volume_usd",
-              "fees_usd", "cum_fees_usd", "taker_fees_usd",
-              "realized_pnl_usd", "cum_realized_pnl_usd"]
+    header = ["date", "fills", "markets", "contracts", "settled_contracts",
+              "volume_usd", "cum_volume_usd", "fees_usd", "cum_fees_usd",
+              "gross_pnl_usd", "net_pnl_usd", "cum_net_pnl_usd"]
     if dest_csv.exists():
         lines = dest_csv.read_text().strip().splitlines()
         for line in lines[1:]:
@@ -185,9 +185,8 @@ def build_ledger(all_fills: list, results: dict, ledger_days: int,
 
     window_start = datetime.now(timezone.utc).timestamp() - ledger_days * 86400
     days: dict[str, dict] = collections.defaultdict(
-        lambda: dict(fills=0, taker=0, markets=set(), contracts=0.0,
-                     settled_ct=0.0, volume=0.0, fees=0.0, taker_fees=0.0,
-                     pnl=0.0))
+        lambda: dict(fills=0, markets=set(), contracts=0.0, settled_ct=0.0,
+                     volume=0.0, fees=0.0, gross=0.0))
     for x in all_fills:
         created = x.get("created_time")
         if not created:
@@ -201,9 +200,6 @@ def build_ledger(all_fills: list, results: dict, ledger_days: int,
         p_paid = yp if x.get("action") == "buy" else (1.0 - yp)
         d = days[day]
         d["fills"] += 1
-        if x.get("is_taker"):
-            d["taker"] += 1
-            d["taker_fees"] += f(x.get("fee_cost")) or 0.0
         d["markets"].add(x.get("ticker", ""))
         d["contracts"] += abs(ct)
         d["volume"] += abs(ct) * p_paid
@@ -212,7 +208,7 @@ def build_ledger(all_fills: list, results: dict, ledger_days: int,
         if res in ("yes", "no"):
             signed = ct if x.get("action") == "buy" else -ct
             settle = 1.0 if res == "yes" else 0.0
-            d["pnl"] += signed * (settle - yp) - (f(x.get("fee_cost")) or 0.0)
+            d["gross"] += signed * (settle - yp)
             d["settled_ct"] += abs(ct)
 
     rows: dict[str, dict] = {}
@@ -227,7 +223,6 @@ def build_ledger(all_fills: list, results: dict, ledger_days: int,
     for day, d in days.items():
         rows[day] = {
             "date": day, "fills": str(d["fills"]),
-            "taker_fills": str(d["taker"]),
             "markets": str(len(d["markets"])),
             "contracts": f"{d['contracts']:.1f}",
             "settled_contracts": f"{d['settled_ct']:.1f}",
@@ -235,17 +230,17 @@ def build_ledger(all_fills: list, results: dict, ledger_days: int,
             "cum_volume_usd": "",  # filled below
             "fees_usd": f"{d['fees']:.4f}",
             "cum_fees_usd": "",  # filled below
-            "taker_fees_usd": f"{d['taker_fees']:.4f}",
-            "realized_pnl_usd": f"{d['pnl']:.2f}",
-            "cum_realized_pnl_usd": "",  # filled below
+            "gross_pnl_usd": f"{d['gross']:.2f}",
+            "net_pnl_usd": f"{d['gross'] - d['fees']:.2f}",
+            "cum_net_pnl_usd": "",  # filled below
         }
     cum = cum_vol = cum_fees = 0.0
     ordered = [rows[k] for k in sorted(rows)]
     for r in ordered:
-        cum += float(r["realized_pnl_usd"] or 0)
+        cum += float(r["net_pnl_usd"] or 0)
         cum_vol += float(r["volume_usd"] or 0)
         cum_fees += float(r["fees_usd"] or 0)
-        r["cum_realized_pnl_usd"] = f"{cum:.2f}"
+        r["cum_net_pnl_usd"] = f"{cum:.2f}"
         r["cum_volume_usd"] = f"{cum_vol:.2f}"
         r["cum_fees_usd"] = f"{cum_fees:.4f}"
     dest_csv.parent.mkdir(parents=True, exist_ok=True)
@@ -274,12 +269,11 @@ def render_ledger_md(ordered: list[dict], dest_md: Path, tail: int = 30) -> None
            "|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for r in ordered[-tail:]:
         out.append(
-            f"| {r['date']} | {r['fills']} | {r['taker_fills']} | {r['markets']} "
-            f"| {r['contracts']} "
+            f"| {r['date']} | {r['fills']} | {r['markets']} | {r['contracts']} "
             f"| {float(r['volume_usd']):,.2f} | {float(r['cum_volume_usd']):,.2f} "
             f"| {r['fees_usd']} | {float(r['cum_fees_usd']):.4f} "
-            f"| {r['taker_fees_usd']} "
-            f"| {float(r['realized_pnl_usd']):+.2f} | {float(r['cum_realized_pnl_usd']):+.2f} |")
+            f"| {float(r['gross_pnl_usd']):+.2f} | {float(r['net_pnl_usd']):+.2f} "
+            f"| {float(r['cum_net_pnl_usd']):+.2f} |")
     out.append("")
     dest_md.write_text("\n".join(out))
 
