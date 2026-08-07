@@ -598,6 +598,72 @@ def test_orderbook_incremental_best_matches_naive():
         assert top.ask == ((D(1) - naive_no) if naive_no is not None else None)
 
 
+def test_release_window_handles_dst_and_matching():
+    """M6: ET release times must convert correctly across DST (EIA 10:30 ET
+    = 14:30Z in August, 15:30Z in January), and weekly/date matching must
+    only fire on the right days."""
+    from datetime import datetime as dt
+    from datetime import timezone as tz
+
+    from bacchus_mm.fifteen import release_window_utc
+
+    eia = {"name": "EIA", "series": ["KXWTI15M"], "weekly": "wed",
+           "at_et": "10:30", "pull_before_seconds": 120, "pull_after_seconds": 180}
+    # Wed 2026-08-12, 14:00Z (10:00 EDT): window is 14:28:00Z..14:33:00Z
+    aug = dt(2026, 8, 12, 14, 0, tzinfo=tz.utc).timestamp()
+    win = release_window_utc(eia, aug)
+    assert win is not None
+    start, end, rel = win
+    assert rel == dt(2026, 8, 12, 14, 30, tzinfo=tz.utc).timestamp()
+    assert start == rel - 120 and end == rel + 180
+    # Wed 2026-01-14 (EST): release is 15:30Z
+    jan = dt(2026, 1, 14, 15, 0, tzinfo=tz.utc).timestamp()
+    win = release_window_utc(eia, jan)
+    assert win is not None and win[2] == dt(2026, 1, 14, 15, 30, tzinfo=tz.utc).timestamp()
+    # Thursday: no fire
+    assert release_window_utc(eia, dt(2026, 8, 13, 14, 0, tzinfo=tz.utc).timestamp()) is None
+    # dates-type entry
+    cpi = {"name": "CPI", "series": ["KXGOLD15M"], "dates": ["2026-08-12"],
+           "at_et": "08:30", "pull_before_seconds": 60, "pull_after_seconds": 60}
+    hit = dt(2026, 8, 12, 12, 0, tzinfo=tz.utc).timestamp()
+    assert release_window_utc(cpi, hit) is not None
+    assert release_window_utc(cpi, dt(2026, 8, 13, 12, 0, tzinfo=tz.utc).timestamp()) is None
+    # malformed entry: refuses quietly
+    assert release_window_utc({"name": "bad", "weekly": "wed", "at_et": "nope"}, aug) is None
+
+
+def test_apply_release_pulls_pulls_matching_workers(tmp_path):
+    from datetime import datetime as dt
+    from datetime import timezone as tz
+    from types import SimpleNamespace as NS
+
+    from bacchus_mm.fifteen import apply_release_pulls
+
+    eia = {"name": "EIA", "series": ["KXWTI15M"], "weekly": "wed",
+           "at_et": "10:30", "pull_before_seconds": 120, "pull_after_seconds": 180}
+    # inside the window: Wed 2026-08-12 14:29Z
+    now = dt(2026, 8, 12, 14, 29, tzinfo=tz.utc).timestamp()
+    wti = NS(pulled_until=0.0, pull_reason="spot_jump", evicted=False,
+             close_reaped=False, wake=lambda: None)
+    btc = NS(pulled_until=0.0, pull_reason="spot_jump", evicted=False,
+             close_reaped=False, wake=lambda: None)
+    events = []
+    held = apply_release_pulls(
+        [eia], {"KXWTI15M-26AUG121430-30": wti, "KXBTC15M-26AUG121430-30": btc},
+        now, 1000.0, lambda t, **kw: events.append((t, kw)), set(),
+    )
+    assert held == 1
+    assert wti.pulled_until > 1000.0 and wti.pull_reason == "release"
+    assert btc.pulled_until == 0.0, "other series untouched"
+    assert events and events[0][0] == "fifteen_release_pull"
+    # outside the window: nothing
+    before = dt(2026, 8, 12, 14, 0, tzinfo=tz.utc).timestamp()
+    wti2 = NS(pulled_until=0.0, pull_reason="spot_jump", evicted=False,
+              close_reaped=False, wake=lambda: None)
+    assert apply_release_pulls([eia], {"KXWTI15M-X": wti2}, before, 0.0,
+                               lambda *a, **k: None, set()) == 0
+
+
 def test_stall_watchdog_samples_blocked_thread(caplog):
     """Stage-2 stall instrumentation: when the heartbeat goes silent, the
     watchdog thread must log the watched thread's CURRENT stack, naming the

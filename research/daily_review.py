@@ -233,6 +233,31 @@ def main() -> None:
                 by_band[(lo, hi)]["pnl"] += pnl
                 break
 
+    # ---- 15M series discovery (public; 2026-08-07): Kalshi expands this
+    # family fast (ZEC/BCH/TON/XRP/ADA and two crypto indexes appeared within
+    # 48h of launch week). Flag anything new vs the committed state file so
+    # the review can propose watch items; the routine never auto-adds.
+    known_path = Path(__file__).resolve().parent / "daily" / "known_15m_series.json"
+    known = set()
+    if known_path.exists():
+        try:
+            known = set(json.loads(known_path.read_text()))
+        except (ValueError, OSError):
+            known = set()
+    live_15m: dict[str, str] = {}
+    for cat in ("Crypto", "Commodities", "Financials", "Economics",
+                "Climate and Weather", "Indices"):
+        try:
+            d = get("/series", f"?category={cat.replace(' ', '%20')}", authed=False)
+        except Exception:  # noqa: BLE001 — discovery is best-effort
+            continue
+        for s in d.get("series") or []:
+            if s.get("frequency") == "fifteen_min":
+                live_15m[s["ticker"]] = s.get("title") or ""
+    new_series = sorted(set(live_15m) - known) if known else []
+    known_path.parent.mkdir(parents=True, exist_ok=True)
+    known_path.write_text(json.dumps(sorted(set(live_15m) | known), indent=0))
+
     # ---- render
     out = []
     out.append(f"# Daily review data: {utc_date} (last {args.hours:.0f}h, unsegmented)")
@@ -275,6 +300,18 @@ def main() -> None:
     for (lo, hi), a in sorted(by_band.items()):
         out.append(f"| {lo:.2f}-{hi:.2f} | {a['ct']:.1f} | {a['pnl']:+.2f} | "
                    f"{a['pnl']/max(a['ct'],1)*100:+.2f} |")
+    out.append("")
+    out.append("## 15M series discovery")
+    out.append("")
+    if not known:
+        out.append(f"- state file seeded with {len(live_15m)} known series "
+                   f"(first run); new listings flagged from tomorrow")
+    elif new_series:
+        for t in new_series:
+            out.append(f"- **NEW SERIES: {t}** ({live_15m.get(t, '')}) - "
+                       f"candidate watch item, never auto-added")
+    else:
+        out.append(f"- no new 15M series ({len(live_15m)} known)")
     out.append("")
     out.append("## Worst and best windows")
     out.append("")

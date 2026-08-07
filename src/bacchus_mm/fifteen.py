@@ -36,7 +36,7 @@ import sys
 import time
 import uuid
 from dataclasses import dataclass, field, replace as dc_replace
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Optional
 
@@ -65,6 +65,95 @@ DEFAULT_SPOT_PRODUCTS = {
     "KXDOGE15M": "DOGE-USD",
     "KXNEAR15M": "NEAR-USD",
 }
+
+
+# 2026-08-07 (M6): default scheduled-release calendar. The commodities have
+# no tick feed for M4, but their jump moments are on a CALENDAR. Times are
+# US Eastern (zoneinfo handles DST); `weekly` entries fire every week on that
+# day, `dates` entries on the listed ISO dates. The daily review maintains
+# the dates lists (CPI/FOMC move month to month); the EIA petroleum report
+# is weekly. Known imperfection: EIA shifts to Thursday on holiday weeks.
+DEFAULT_RELEASE_CALENDAR = [
+    {
+        "name": "EIA petroleum status",
+        "series": ["KXWTI15M"],
+        "weekly": "wed",
+        "at_et": "10:30",
+        "pull_before_seconds": 120,
+        "pull_after_seconds": 180,
+    },
+    # Template for date-anchored releases; the daily review proposes updates:
+    # {"name": "CPI", "series": ["KXGOLD15M", "KXSILVER15M"],
+    #  "dates": ["2026-08-12"], "at_et": "08:30",
+    #  "pull_before_seconds": 120, "pull_after_seconds": 300},
+]
+
+_WEEKDAYS = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
+
+
+def release_window_utc(entry: dict, now_utc: float):
+    """If `entry` fires on the ET calendar day containing now_utc, return the
+    pull window (start_ts, end_ts, release_ts) in UTC epoch seconds; else
+    None. Pure function; ET/DST handled by zoneinfo."""
+    from zoneinfo import ZoneInfo
+
+    ny = ZoneInfo("America/New_York")
+    now_et = datetime.fromtimestamp(now_utc, timezone.utc).astimezone(ny)
+    day = now_et.date()
+    weekly = entry.get("weekly")
+    if weekly is not None:
+        if _WEEKDAYS.get(str(weekly)[:3].lower()) != day.weekday():
+            return None
+    else:
+        if day.isoformat() not in (entry.get("dates") or []):
+            return None
+    try:
+        hh, mm = str(entry["at_et"]).split(":")
+        rel = datetime(day.year, day.month, day.day, int(hh), int(mm), tzinfo=ny)
+    except (KeyError, ValueError):
+        return None
+    rel_ts = rel.timestamp()
+    before = float(entry.get("pull_before_seconds", 120))
+    after = float(entry.get("pull_after_seconds", 180))
+    return rel_ts - before, rel_ts + after, rel_ts
+
+
+def apply_release_pulls(
+    entries: list, workers: dict, now_utc: float, mono_now: float, emit, announced: set
+) -> int:
+    """One tick of the M6 loop: for every calendar entry whose pull window
+    contains now, pull every active worker of its series. Returns how many
+    workers are currently held pulled. `announced` dedups events per
+    (entry, ticker, release instant)."""
+    held = 0
+    for entry in entries:
+        win = release_window_utc(entry, now_utc)
+        if win is None:
+            continue
+        start_ts, end_ts, rel_ts = win
+        if not (start_ts <= now_utc <= end_ts):
+            continue
+        prefixes = tuple(f"{s}-" for s in (entry.get("series") or []))
+        if not prefixes:
+            continue
+        for tkr, w in list(workers.items()):
+            if not tkr.startswith(prefixes) or w.evicted or w.close_reaped:
+                continue
+            # keep bumping: stays pulled through the window, auto-expires after
+            w.pulled_until = max(w.pulled_until, mono_now + min(10.0, end_ts - now_utc + 1))
+            w.pull_reason = "release"
+            w.wake()
+            held += 1
+            key = (entry.get("name"), tkr, int(rel_ts))
+            if key not in announced:
+                announced.add(key)
+                emit(
+                    "fifteen_release_pull", ticker=tkr,
+                    release=entry.get("name"),
+                    seconds_to_release=round(rel_ts - now_utc, 0),
+                    window_seconds=round(end_ts - start_ts, 0),
+                )
+    return held
 
 
 def detect_jump(samples: list, window_s: float, now: float) -> float:
@@ -139,6 +228,10 @@ class FifteenParams:
     spot_jump_cooloff_seconds: float = 20.0
     spot_poll_seconds: float = 2.0
     spot_products: dict = field(default_factory=lambda: dict(DEFAULT_SPOT_PRODUCTS))
+    # M6 scheduled-release pull (2026-08-07): pull quotes around calendar
+    # releases (times in US Eastern; see DEFAULT_RELEASE_CALENDAR). Empty
+    # list disables.
+    release_calendar: list = field(default_factory=lambda: list(DEFAULT_RELEASE_CALENDAR))
 
     @classmethod
     def from_config(cls, raw: dict) -> "FifteenParams":
@@ -187,6 +280,7 @@ class FifteenParams:
             ),
             spot_poll_seconds=float(f.get("spot_poll_seconds", d.spot_poll_seconds)),
             spot_products=dict(f.get("spot_products", d.spot_products)),
+            release_calendar=list(f.get("release_calendar", d.release_calendar)),
         )
 
 
@@ -739,6 +833,23 @@ async def run_fifteen(cfg: Config, live: bool, dry_run: bool) -> None:
                             )
                     await asyncio.sleep(p.spot_poll_seconds)
 
+        async def release_pull_loop():
+            """M6 (2026-08-07): scheduled-release pull. The commodities' jump
+            moments are on a calendar (EIA Wed 10:30 ET for WTI; CPI/FOMC
+            days for the metals) and they have no tick feed for M4 — so the
+            calendar IS their jump detector. Reuses the worker pulled_until
+            mechanism with pull_reason='release' for attribution."""
+            announced: set = set()
+            while not stop_event.is_set():
+                try:
+                    apply_release_pulls(
+                        p.release_calendar, workers, time.time(),
+                        time.monotonic(), events.emit, announced,
+                    )
+                except Exception:  # noqa: BLE001 — a bad calendar entry must not die the loop
+                    log.exception("release pull tick failed")
+                await asyncio.sleep(5.0)
+
         # 2026-08-07 stage 2: heartbeat shared with the stall watchdog THREAD,
         # which stack-samples the loop the moment this goes silent.
         import threading as _threading
@@ -818,6 +929,8 @@ async def run_fifteen(cfg: Config, live: bool, dry_run: bool) -> None:
         _spawn(pull_loop(), "pull_loop")
         if p.spot_jump_bps and p.spot_products:
             _spawn(spot_feed(), "spot_feed")  # M4; runs in observe too (telemetry)
+        if p.release_calendar:
+            _spawn(release_pull_loop(), "release_pull")  # M6
         _spawn(loop_lag_probe(), "loop_lag_probe")  # 2026-08-07 stall instrumentation
         _spawn(risk_loop(), "risk_loop")
         _spawn(eventlog_flush_loop(), "eventlog_flush")

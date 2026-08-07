@@ -378,8 +378,11 @@ class MarketWorker:
         # 2026-08-06 (M4 spot-jump pull): an external feed (fifteen.py's spot
         # task) sets a monotonic deadline; _requote cancels resting quotes and
         # stays out until it passes. Budish et al: the slow maker's only
-        # winning move on a jump is to not be resting.
+        # winning move on a jump is to not be resting. 2026-08-07 (M6): the
+        # release-calendar loop reuses the same mechanism with its own
+        # pull_reason label so attribution can tell the levers apart.
         self.pulled_until = 0.0
+        self.pull_reason = "spot_jump"
         # M5 flow gate state: recent book-update stamps + gated latch.
         self._update_times: deque[float] = deque(maxlen=256)
         self._flow_gated = False
@@ -576,10 +579,10 @@ class MarketWorker:
         # a spot jump is exactly when a resting exit gets sniped too.
         if time.monotonic() < self.pulled_until:
             self.bid_order = await self._reconcile(
-                Side.BID, self.bid_order, None, 0, cancel_reason="spot_jump"
+                Side.BID, self.bid_order, None, 0, cancel_reason=self.pull_reason
             )
             self.ask_order = await self._reconcile(
-                Side.ASK, self.ask_order, None, 0, cancel_reason="spot_jump"
+                Side.ASK, self.ask_order, None, 0, cancel_reason=self.pull_reason
             )
             self._dirty.set()  # re-check when the pull expires
             return
