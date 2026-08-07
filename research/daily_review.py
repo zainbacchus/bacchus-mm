@@ -162,8 +162,8 @@ def build_ledger(all_fills: list, results: dict, ledger_days: int,
     """
     existing: dict[str, dict] = {}
     header = ["date", "fills", "markets", "contracts", "settled_contracts",
-              "volume_usd", "fees_usd", "realized_pnl_usd",
-              "cum_realized_pnl_usd"]
+              "volume_usd", "cum_volume_usd", "fees_usd", "cum_fees_usd",
+              "realized_pnl_usd", "cum_realized_pnl_usd"]
     if dest_csv.exists():
         lines = dest_csv.read_text().strip().splitlines()
         for line in lines[1:]:
@@ -215,15 +215,21 @@ def build_ledger(all_fills: list, results: dict, ledger_days: int,
             "contracts": f"{d['contracts']:.1f}",
             "settled_contracts": f"{d['settled_ct']:.1f}",
             "volume_usd": f"{d['volume']:.2f}",
+            "cum_volume_usd": "",  # filled below
             "fees_usd": f"{d['fees']:.4f}",
+            "cum_fees_usd": "",  # filled below
             "realized_pnl_usd": f"{d['pnl']:.2f}",
             "cum_realized_pnl_usd": "",  # filled below
         }
-    cum = 0.0
+    cum = cum_vol = cum_fees = 0.0
     ordered = [rows[k] for k in sorted(rows)]
     for r in ordered:
         cum += float(r["realized_pnl_usd"] or 0)
+        cum_vol += float(r["volume_usd"] or 0)
+        cum_fees += float(r["fees_usd"] or 0)
         r["cum_realized_pnl_usd"] = f"{cum:.2f}"
+        r["cum_volume_usd"] = f"{cum_vol:.2f}"
+        r["cum_fees_usd"] = f"{cum_fees:.4f}"
     dest_csv.parent.mkdir(parents=True, exist_ok=True)
     dest_csv.write_text(
         ",".join(header) + "\n"
@@ -240,12 +246,13 @@ def render_ledger_md(ordered: list[dict], dest_md: Path, tail: int = 30) -> None
            "Note: contracts can be fractional - Kalshi's 15-minute markets",
            "let counterparties trade dollar amounts (e.g. $5 at 37c = 13.51",
            "contracts), so whole-contract orders fill in pieces.", "",
-           "| date | fills | markets | contracts | volume $ | fees $ | pnl $ | cum pnl $ |",
-           "|---|---|---|---|---|---|---|---|"]
+           "| date | fills | markets | contracts | volume $ | cum volume $ | fees $ | cum fees $ | pnl $ | cum pnl $ |",
+           "|---|---|---|---|---|---|---|---|---|---|"]
     for r in ordered[-tail:]:
         out.append(
             f"| {r['date']} | {r['fills']} | {r['markets']} | {r['contracts']} "
-            f"| {float(r['volume_usd']):,.2f} | {r['fees_usd']} "
+            f"| {float(r['volume_usd']):,.2f} | {float(r['cum_volume_usd']):,.2f} "
+            f"| {r['fees_usd']} | {float(r['cum_fees_usd']):.4f} "
             f"| {float(r['realized_pnl_usd']):+.2f} | {float(r['cum_realized_pnl_usd']):+.2f} |")
     out.append("")
     dest_md.write_text("\n".join(out))
