@@ -132,26 +132,149 @@ def close_ts_from_ticker(tk: str):
     return None
 
 
+def build_ledger(all_fills: list, results: dict, equity_today, ledger_days: int,
+                 dest_csv: Path) -> list[dict]:
+    """Daily accounting ledger (2026-08-07, owner request): one row per UTC
+    day — fills, distinct markets, contracts, $ volume, $ fees, settled
+    realized PnL, cumulative PnL, and an equity stamp.
+
+    Definitions (documented here because accounting arguments are eternal):
+      volume_usd   = sum(contracts x price_paid) — the cash outlay side of
+                     every fill (buy yes at p pays p; sell yes at p is buy
+                     no, pays 1-p).
+      realized_pnl = settled-outcome PnL attributed to the FILL's UTC day
+                     (not the settle day); fills whose market has not
+                     settled yet are counted in volume/fees but not PnL —
+                     the daily rebuild folds them in once they settle.
+      equity_usd   = balance + open positions, stamped only on the day the
+                     script runs (it is an observation, not reconstructable
+                     history). Existing stamps are preserved on rebuild.
+
+    Idempotent: rows inside the rebuild window are recomputed from the API;
+    rows older than the window are preserved verbatim from the existing CSV.
+    """
+    existing: dict[str, dict] = {}
+    header = ["date", "fills", "markets", "contracts", "settled_contracts",
+              "volume_usd", "fees_usd", "realized_pnl_usd",
+              "cum_realized_pnl_usd", "equity_usd"]
+    if dest_csv.exists():
+        lines = dest_csv.read_text().strip().splitlines()
+        for line in lines[1:]:
+            parts = line.split(",")
+            if parts and parts[0]:
+                existing[parts[0]] = dict(zip(header, parts))
+
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    window_start = datetime.now(timezone.utc).timestamp() - ledger_days * 86400
+    days: dict[str, dict] = collections.defaultdict(
+        lambda: dict(fills=0, markets=set(), contracts=0.0, settled_ct=0.0,
+                     volume=0.0, fees=0.0, pnl=0.0))
+    for x in all_fills:
+        created = x.get("created_time")
+        if not created:
+            continue
+        fts = datetime.fromisoformat(created.replace("Z", "+00:00"))
+        day = fts.strftime("%Y-%m-%d")
+        ct = f(x.get("count_fp")) or f(x.get("count")) or 0.0
+        yp = f(x.get("yes_price_dollars"))
+        if yp is None:
+            continue
+        p_paid = yp if x.get("action") == "buy" else (1.0 - yp)
+        d = days[day]
+        d["fills"] += 1
+        d["markets"].add(x.get("ticker", ""))
+        d["contracts"] += abs(ct)
+        d["volume"] += abs(ct) * p_paid
+        d["fees"] += f(x.get("fee_cost")) or 0.0
+        res = results.get(x.get("ticker", ""))
+        if res in ("yes", "no"):
+            signed = ct if x.get("action") == "buy" else -ct
+            settle = 1.0 if res == "yes" else 0.0
+            d["pnl"] += signed * (settle - yp) - (f(x.get("fee_cost")) or 0.0)
+            d["settled_ct"] += abs(ct)
+
+    rows: dict[str, dict] = {}
+    for day, old in existing.items():
+        # preserve rows older than the rebuild window verbatim
+        try:
+            day_ts = datetime.fromisoformat(day).replace(tzinfo=timezone.utc).timestamp()
+        except ValueError:
+            continue
+        if day_ts < window_start:
+            rows[day] = old
+    for day, d in days.items():
+        rows[day] = {
+            "date": day, "fills": str(d["fills"]),
+            "markets": str(len(d["markets"])),
+            "contracts": f"{d['contracts']:.1f}",
+            "settled_contracts": f"{d['settled_ct']:.1f}",
+            "volume_usd": f"{d['volume']:.2f}",
+            "fees_usd": f"{d['fees']:.4f}",
+            "realized_pnl_usd": f"{d['pnl']:.2f}",
+            "cum_realized_pnl_usd": "",  # filled below
+            # preserve any prior equity stamp; today gets a fresh one
+            "equity_usd": (existing.get(day, {}).get("equity_usd", "")
+                           if day != today else
+                           (f"{equity_today:.2f}" if equity_today is not None else "")),
+        }
+    cum = 0.0
+    ordered = [rows[k] for k in sorted(rows)]
+    for r in ordered:
+        cum += float(r["realized_pnl_usd"] or 0)
+        r["cum_realized_pnl_usd"] = f"{cum:.2f}"
+    dest_csv.parent.mkdir(parents=True, exist_ok=True)
+    dest_csv.write_text(
+        ",".join(header) + "\n"
+        + "\n".join(",".join(r[h] for h in header) for r in ordered) + "\n"
+    )
+    return ordered
+
+
+def render_ledger_md(ordered: list[dict], dest_md: Path, tail: int = 30) -> None:
+    out = ["# Daily ledger", "",
+           "Definitions in research/daily_review.py build_ledger(). realized",
+           "PnL is settled-only, attributed to the fill's UTC day; the daily",
+           "rebuild folds late settlements in. Full history: LEDGER.csv.", "",
+           "| date | fills | markets | contracts | volume $ | fees $ | pnl $ | cum pnl $ | equity $ |",
+           "|---|---|---|---|---|---|---|---|---|"]
+    for r in ordered[-tail:]:
+        out.append(
+            f"| {r['date']} | {r['fills']} | {r['markets']} | {r['contracts']} "
+            f"| {float(r['volume_usd']):,.2f} | {r['fees_usd']} "
+            f"| {float(r['realized_pnl_usd']):+.2f} | {float(r['cum_realized_pnl_usd']):+.2f} "
+            f"| {r['equity_usd'] or '-'} |")
+    out.append("")
+    dest_md.write_text("\n".join(out))
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--hours", type=float, default=26.0)
+    ap.add_argument("--ledger-days", type=int, default=45,
+                    help="rebuild window for the daily ledger (older rows preserved)")
     args = ap.parse_args()
 
     now = time.time()
     t0 = int(now - args.hours * 3600)
     utc_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-    # ---- fills (private, GET only)
-    fills, cursor = [], None
+    # ---- fills (private, GET only). One pull covers BOTH the review window
+    # and the ledger rebuild window; the review tables filter down to 15M
+    # fills inside --hours, the ledger uses every account fill in the window.
+    pull_start = int(min(t0, now - args.ledger_days * 86400))
+    all_fills, cursor = [], None
     while True:
-        d = get("/portfolio/fills", f"?limit=200&min_ts={t0}"
+        d = get("/portfolio/fills", f"?limit=200&min_ts={pull_start}"
                 + (f"&cursor={cursor}" if cursor else ""))
         got = d.get("fills") or []
-        fills.extend(got)
+        all_fills.extend(got)
         cursor = d.get("cursor")
         if not cursor or not got:
             break
-    fills = [x for x in fills if FIFTEEN.match(x.get("ticker", ""))]
+    fills = [x for x in all_fills
+             if FIFTEEN.match(x.get("ticker", ""))
+             and (lambda c: c and datetime.fromisoformat(
+                 c.replace("Z", "+00:00")).timestamp() >= t0)(x.get("created_time"))]
 
     # ---- balance (ground truth anchor)
     bal = get("/portfolio/balance")
@@ -159,7 +282,7 @@ def main() -> None:
     portfolio_cents = f(bal.get("portfolio_value")) or 0.0
 
     # ---- settlement results + close times for involved tickers (public)
-    tickers = sorted({x["ticker"] for x in fills})
+    tickers = sorted({x["ticker"] for x in all_fills})
     results: dict[str, str] = {}
     closes: dict[str, float] = {}
     for series in sorted({t.split("-")[0] for t in tickers}):
@@ -232,6 +355,15 @@ def main() -> None:
                 by_band[(lo, hi)]["ct"] += abs(ct)
                 by_band[(lo, hi)]["pnl"] += pnl
                 break
+
+    # ---- daily accounting ledger (2026-08-07): full-account time series.
+    equity_today = (balance + portfolio_cents / 100) if balance is not None else None
+    ledger_rows = build_ledger(
+        all_fills, results, equity_today, args.ledger_days,
+        Path(__file__).resolve().parent / "daily" / "LEDGER.csv",
+    )
+    render_ledger_md(ledger_rows,
+                     Path(__file__).resolve().parent / "daily" / "LEDGER.md")
 
     # ---- 15M series discovery (public; 2026-08-07): Kalshi expands this
     # family fast (ZEC/BCH/TON/XRP/ADA and two crypto indexes appeared within

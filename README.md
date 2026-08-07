@@ -115,7 +115,12 @@ checkpoints and runs daily:
    checks, and at most three config proposals with the evidence rows quoted.
    Statistical humility is enforced: evidence that does not clear the bar
    produces explicit HOLDs, not tweaks.
-3. **A human merges and deploys.** Review PRs that only record the day merge
+3. **A running ledger** lives at
+   [research/daily/LEDGER.md](research/daily/LEDGER.md): one row per UTC day
+   with trades, markets, contracts, dollar volume, fees, settled PnL, and an
+   equity stamp, rebuilt idempotently every morning back to the account's
+   first fill.
+4. **A human merges and deploys.** Review PRs that only record the day merge
    on sight; a PR carrying a PROPOSAL commit changes `config.yaml` and takes
    effect only after the owner merges AND redeploys. Nothing reaches the
    live bot without both.
