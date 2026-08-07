@@ -2,21 +2,19 @@
 
 Columns: fills = individual executions; markets = distinct
 15-minute windows traded (each window is its own market with its
-own ticker); contracts = total quantity across fills (fractional).
+own ticker); contracts = total quantity across fills (fractional:
+Kalshi's 15-minute markets let counterparties trade dollar
+amounts, so whole-contract orders fill in pieces).
 
-Definitions in research/daily_review.py build_ledger(). Realized
-PnL is settled-only, attributed to the fill's UTC day; the daily
-rebuild folds late settlements in. Full history: LEDGER.csv.
-Note: contracts can be fractional - Kalshi's 15-minute markets
-let counterparties trade dollar amounts (e.g. $5 at 37c = 13.51
-contracts), so whole-contract orders fill in pieces.
+Bot fills are 100% maker (post-only; the daily review asserts
+taker == 0 every run). gross = settled PnL before fees, the
+spread-captured number, attributed to the fill's UTC day with
+late settlements folded in by the daily rebuild; net = gross
+minus the day's fees. Full definitions: build_ledger() in
+research/daily_review.py. Full history: LEDGER.csv.
 
-All fills should be MAKER fills (post-only bot): the taker
-columns are tripwires, and any nonzero value is an invariant
-breach to treat as an incident.
-
-| date | fills | taker | markets | contracts | volume $ | cum volume $ | fees $ | cum fees $ | taker fees $ | pnl $ | cum pnl $ |
-|---|---|---|---|---|---|---|---|---|---|---|---|
+| date | fills | markets | contracts | volume $ | cum volume $ | fees $ | cum fees $ | gross pnl $ | net pnl $ | cum net pnl $ |
+|---|---|---|---|---|---|---|---|---|---|---|
 | 2026-07-15 | 10 | 8 | 19.0 | 9.55 | 9.55 | 0.0000 | 0.0000 | -0.47 | -0.47 | -0.47 |
 | 2026-07-16 | 6 | 4 | 11.2 | 3.77 | 13.32 | 0.0000 | 0.0000 | -0.19 | -0.19 | -0.66 |
 | 2026-07-17 | 15 | 13 | 27.0 | 17.54 | 30.86 | 0.0000 | 0.0000 | -1.42 | -1.42 | -2.08 |

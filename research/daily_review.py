@@ -251,29 +251,41 @@ def build_ledger(all_fills: list, results: dict, ledger_days: int,
     return ordered
 
 
+# One spec drives BOTH the header and the rows, so they cannot diverge
+# (2026-08-07: a hand-written header once shipped 12 stale labels over
+# 11-value rows). (label, key, formatter).
+_LEDGER_COLS = [
+    ("date", "date", str),
+    ("fills", "fills", str),
+    ("markets", "markets", str),
+    ("contracts", "contracts", str),
+    ("volume $", "volume_usd", lambda v: f"{float(v):,.2f}"),
+    ("cum volume $", "cum_volume_usd", lambda v: f"{float(v):,.2f}"),
+    ("fees $", "fees_usd", str),
+    ("cum fees $", "cum_fees_usd", lambda v: f"{float(v):.4f}"),
+    ("gross pnl $", "gross_pnl_usd", lambda v: f"{float(v):+.2f}"),
+    ("net pnl $", "net_pnl_usd", lambda v: f"{float(v):+.2f}"),
+    ("cum net pnl $", "cum_net_pnl_usd", lambda v: f"{float(v):+.2f}"),
+]
+
+
 def render_ledger_md(ordered: list[dict], dest_md: Path, tail: int = 30) -> None:
     out = ["# Daily ledger", "",
            "Columns: fills = individual executions; markets = distinct",
            "15-minute windows traded (each window is its own market with its",
-           "own ticker); contracts = total quantity across fills (fractional).", "",
-           "Definitions in research/daily_review.py build_ledger(). Realized",
-           "PnL is settled-only, attributed to the fill's UTC day; the daily",
-           "rebuild folds late settlements in. Full history: LEDGER.csv.",
-           "Note: contracts can be fractional - Kalshi's 15-minute markets",
-           "let counterparties trade dollar amounts (e.g. $5 at 37c = 13.51",
-           "contracts), so whole-contract orders fill in pieces.", "",
-           "All fills should be MAKER fills (post-only bot): the taker",
-           "columns are tripwires, and any nonzero value is an invariant",
-           "breach to treat as an incident.", "",
-           "| date | fills | taker | markets | contracts | volume $ | cum volume $ | fees $ | cum fees $ | taker fees $ | pnl $ | cum pnl $ |",
-           "|---|---|---|---|---|---|---|---|---|---|---|---|"]
+           "own ticker); contracts = total quantity across fills (fractional:",
+           "Kalshi's 15-minute markets let counterparties trade dollar",
+           "amounts, so whole-contract orders fill in pieces).", "",
+           "Bot fills are 100% maker (post-only; the daily review asserts",
+           "taker == 0 every run). gross = settled PnL before fees, the",
+           "spread-captured number, attributed to the fill's UTC day with",
+           "late settlements folded in by the daily rebuild; net = gross",
+           "minus the day's fees. Full definitions: build_ledger() in",
+           "research/daily_review.py. Full history: LEDGER.csv.", "",
+           "| " + " | ".join(label for label, _, _ in _LEDGER_COLS) + " |",
+           "|" + "---|" * len(_LEDGER_COLS)]
     for r in ordered[-tail:]:
-        out.append(
-            f"| {r['date']} | {r['fills']} | {r['markets']} | {r['contracts']} "
-            f"| {float(r['volume_usd']):,.2f} | {float(r['cum_volume_usd']):,.2f} "
-            f"| {r['fees_usd']} | {float(r['cum_fees_usd']):.4f} "
-            f"| {float(r['gross_pnl_usd']):+.2f} | {float(r['net_pnl_usd']):+.2f} "
-            f"| {float(r['cum_net_pnl_usd']):+.2f} |")
+        out.append("| " + " | ".join(fmt(r[key]) for _, key, fmt in _LEDGER_COLS) + " |")
     out.append("")
     dest_md.write_text("\n".join(out))
 
