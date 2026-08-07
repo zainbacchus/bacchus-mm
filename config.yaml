@@ -25,8 +25,15 @@ fifteen:
   # HYPE -0.48 c/ct); XRP15M is more of the same cohort and ADA15M is listed
   # but has zero settled history. Re-expansion beyond this is a data
   # decision via the daily review loop.
+  # 2026-08-07 addendum: ETH added (crypto MAJOR, same regime as BTC: +0.05
+  # c/ct on 379 ct, near flat, has a Coinbase feed so M4 protects it). BNB
+  # deliberately NOT added despite +0.76: it is one noisy member of the
+  # alt-crypto cohort whose POOLED number is clearly negative (~-0.9c/ct
+  # over 1,268 ct), and it has no spot feed for M4. Promotion requires the
+  # daily reviews to build a cleaner case.
   series:
     - KXBTC15M
+    - KXETH15M
     - KXGOLD15M
     - KXSILVER15M
     - KXWTI15M
