@@ -153,9 +153,14 @@ def build_ledger(all_fills: list, results: dict, ledger_days: int,
 
     Maker vs taker: the bot is post-only, so EVERY fill should be a maker
     fill. The taker_fills and taker_fees_usd columns are TRIPWIRES, not a
-    breakdown: any nonzero value is a post-only invariant breach and must be
-    treated as an incident. (All fees to date are maker fees from
-    Non-Standard-table legacy series; the 15M series charge makers nothing.)
+    breakdown: a nonzero value means either a post-only invariant breach OR
+    a manual trade on the shared account, and deserves attribution either
+    way. The tripwire's first-ever scan caught exactly one taker fill
+    (2026-08-06, KXECONSTATCPIYOY, 0.99 contracts, $0.0143 fee): a manual
+    owner trade from the Kalshi app during that night's kill-switch halt -
+    the order id appears nowhere in the bot's event logs, the bot only
+    places whole-contract post-only orders, and it was halted at the time.
+    Bot fills remain 100% maker.
 
     Contracts can be FRACTIONAL: Kalshi's 15-minute markets trade in
     fractional contracts (counterparties can submit dollar amounts, e.g.
