@@ -1107,7 +1107,14 @@ def cli() -> None:
     _listener = logging.handlers.QueueListener(_log_q, _stream)
     _listener.start()
     atexit.register(_listener.stop)
-    logging.basicConfig(level=logging.INFO, handlers=[logging.handlers.QueueHandler(_log_q)])
+    _qh = logging.handlers.QueueHandler(_log_q)
+    # QueueHandler.prepare() pre-formats the record into its message. Give it
+    # a message-only formatter EXPLICITLY: a formatterless handler would get
+    # basicConfig's default level:name:message formatter attached, and every
+    # line came out double-prefixed ("INFO bacchus_mm: INFO:bacchus_mm:...").
+    # The listener-side StreamHandler owns the real format.
+    _qh.setFormatter(logging.Formatter("%(message)s"))
+    logging.basicConfig(level=logging.INFO, handlers=[_qh])
     root = Path(args.root)
     _load_env_file(root)
     cfg = Config.load(root)
