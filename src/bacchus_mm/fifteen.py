@@ -125,6 +125,12 @@ class FifteenParams:
     fast_move_threshold: Decimal = Decimal("0.03")
     fast_move_window: float = 10.0
     fast_move_cooloff: float = 45.0
+    # M5 flow gate (2026-08-07, first-evening finding): quote only while the
+    # book shows at least flow_min_updates updates inside flow_window_seconds.
+    # Thin-book fills measured -13 to -24c/ct; standing down IS the position.
+    # Doubles as an overnight auto-curfew. 0 disables.
+    flow_min_updates: int = 10
+    flow_window_seconds: float = 30.0
     # M4 spot-jump defensive pull (Budish et al: don't be the stale quote).
     # A move of jump_bps within jump_window_seconds on the series' spot feed
     # cancels that series' quotes for jump_cooloff_seconds. 0 bps disables.
@@ -170,6 +176,8 @@ class FifteenParams:
             fast_move_threshold=Decimal(str(f.get("fast_move_threshold", d.fast_move_threshold))),
             fast_move_window=float(f.get("fast_move_window", d.fast_move_window)),
             fast_move_cooloff=float(f.get("fast_move_cooloff", d.fast_move_cooloff)),
+            flow_min_updates=int(f.get("flow_min_updates", d.flow_min_updates)),
+            flow_window_seconds=float(f.get("flow_window_seconds", d.flow_window_seconds)),
             spot_jump_bps=float(f.get("spot_jump_bps", d.spot_jump_bps)),
             spot_jump_window_seconds=float(
                 f.get("spot_jump_window_seconds", d.spot_jump_window_seconds)
@@ -472,6 +480,9 @@ async def run_fifteen(cfg: Config, live: bool, dry_run: bool) -> None:
             # M1 + M3 (2026-08-06): see join_touch.py for sources/semantics.
             join_tilt_threshold=(p.tilt_tail_threshold or None),
             join_max_loss_per_market=(p.max_loss_per_market or None),
+            # M5 (2026-08-07): quote only while the book is demonstrably alive.
+            flow_min_updates=p.flow_min_updates,
+            flow_window_seconds=p.flow_window_seconds,
             # audit 2026-08-06: dedup identical decisions (30s heartbeat) —
             # these books wake workers ~1/s; unthrottled that is ~0.5GB/day of
             # identical rows and a full fly volume mid-week.
@@ -675,7 +686,10 @@ async def run_fifteen(cfg: Config, live: bool, dry_run: bool) -> None:
             import certifi
 
             ctx = ssl.create_default_context(cafile=certifi.where())
-            hist: dict[str, list] = {s: [] for s in p.spot_products}
+            # Only poll feeds for series we actually quote (2026-08-07: the
+            # series list shrank; polling the rest is wasted egress).
+            active = {s: prod for s, prod in p.spot_products.items() if s in set(p.series)}
+            hist: dict[str, list] = {s: [] for s in active}
             last_emit: dict[str, float] = {}
             async with aiohttp.ClientSession(
                 timeout=aiohttp.ClientTimeout(total=5),
@@ -683,7 +697,7 @@ async def run_fifteen(cfg: Config, live: bool, dry_run: bool) -> None:
                 headers={"User-Agent": "bacchus-mm/0.1"},
             ) as session:
                 while not stop_event.is_set():
-                    for series, product in p.spot_products.items():
+                    for series, product in active.items():
                         try:
                             async with session.get(
                                 f"https://api.exchange.coinbase.com/products/{product}/ticker"

@@ -499,6 +499,51 @@ async def test_idle_until_halt_cleared(tmp_path):
     assert await _idle_until_halt_cleared(risk, stop, poll_seconds=0.02) is False
 
 
+@pytest.mark.asyncio
+async def test_flow_gate_stands_down_on_quiet_book_and_resumes(tmp_path):
+    """M5: a book with too few recent updates gets no quotes (and emits the
+    gate transition); a lively book quotes normally again."""
+    yes, no = _books({"0.50": 10}, {"0.51": 10})
+    ex = _StubExchange(yes, no)
+    events = EventLog(tmp_path, "s")
+    risk = RiskManager(params=RiskParams(max_contracts_per_market=5), state_dir=tmp_path)
+    w = MarketWorker(
+        "KXBTC15M-TEST", ex, StrategyParams(quote_size=1, tick=D("0.001")),
+        risk, events, WorkerConfig(join_touch_only=True, flow_min_updates=5,
+                                   flow_window_seconds=30.0),
+        dry_run=True,
+    )
+    top = BookTop(ticker="KXBTC15M-TEST", bid=D("0.50"), bid_size=10,
+                  ask=D("0.51"), ask_size=10, ts_ms=1)
+    w.on_book_top(top)  # 1 update < 5 required
+    await w._requote()
+    events.flush()
+    assert events.db.execute(
+        "SELECT COUNT(*) FROM events WHERE type='quote_decision'"
+    ).fetchone()[0] == 0
+    gate_rows = events.db.execute(
+        "SELECT payload FROM events WHERE type='quotes_pulled'"
+    ).fetchall()
+    import json as _json
+
+    assert any(_json.loads(r[0])["reason"] == "flow_gate" for r in gate_rows)
+    for _ in range(6):  # book comes alive
+        w.on_book_top(top)
+    await w._requote()
+    events.flush()
+    assert events.db.execute(
+        "SELECT COUNT(*) FROM events WHERE type='quote_decision'"
+    ).fetchone()[0] == 1
+    assert events.db.execute(
+        "SELECT COUNT(*) FROM events WHERE type='quotes_resumed'"
+    ).fetchone()[0] == 1
+    events.close()
+
+
+def test_flow_gate_off_by_default_for_legacy_path():
+    assert WorkerConfig().flow_min_updates == 0
+
+
 def test_guard_monotonic_spread_min_matches_naive():
     """Watchdog-finding fix: the monotonic deque's front must equal a naive
     min() over the live window at every step (fuzzed, fixed seed)."""

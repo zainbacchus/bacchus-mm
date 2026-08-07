@@ -94,6 +94,15 @@ class WorkerConfig:
     # the sources and the exact semantics). 0/None disables each.
     join_tilt_threshold: Optional[Decimal] = None
     join_max_loss_per_market: Optional[Decimal] = None
+    # M5 flow gate (2026-08-07, from the first live evening): windows where
+    # our fills were plentiful ran near flat; windows with a handful of fills
+    # ran -13 to -24c/contract — when uninformed flow disappears (overnight),
+    # the only counterparties left are informed. Quote ONLY while the book is
+    # demonstrably alive: at least flow_min_updates book updates inside
+    # flow_window_seconds. 0 disables. A cold worker starts gated until the
+    # book proves itself — deliberate.
+    flow_min_updates: int = 0
+    flow_window_seconds: float = 30.0
 
 
 class FastMoveGuard:
@@ -371,10 +380,15 @@ class MarketWorker:
         # stays out until it passes. Budish et al: the slow maker's only
         # winning move on a jump is to not be resting.
         self.pulled_until = 0.0
+        # M5 flow gate state: recent book-update stamps + gated latch.
+        self._update_times: deque[float] = deque(maxlen=256)
+        self._flow_gated = False
 
     # Called from the websocket consumer (same event loop).
     def on_book_top(self, top: BookTop) -> None:
         self.top = top
+        if self.cfg.flow_min_updates:
+            self._update_times.append(time.monotonic())
         mid = top.mid
         if mid is not None:
             self.vol.update(mid)
@@ -525,6 +539,36 @@ class MarketWorker:
             return
         if self.evicted and not self.reduce_only:
             return
+
+        # M5 (2026-08-07): flow gate — quote only while the book is alive.
+        # Thin books' few fills measured -13 to -24c/ct on the first evening;
+        # standing down is the position. Latch transitions for telemetry.
+        if self.cfg.flow_min_updates:
+            now_fg = time.monotonic()
+            recent = sum(
+                1 for t in self._update_times
+                if now_fg - t <= self.cfg.flow_window_seconds
+            )
+            if recent < self.cfg.flow_min_updates:
+                if not self._flow_gated:
+                    self._flow_gated = True
+                    self.events.emit(
+                        "quotes_pulled", ticker=self.ticker, reason="flow_gate",
+                        updates_in_window=recent,
+                    )
+                    log.info("%s: flow gate engaged (%d updates in %.0fs)",
+                             self.ticker, recent, self.cfg.flow_window_seconds)
+                self.bid_order = await self._reconcile(
+                    Side.BID, self.bid_order, None, 0, cancel_reason="flow_gate"
+                )
+                self.ask_order = await self._reconcile(
+                    Side.ASK, self.ask_order, None, 0, cancel_reason="flow_gate"
+                )
+                return
+            if self._flow_gated:
+                self._flow_gated = False
+                self.events.emit("quotes_resumed", ticker=self.ticker, reason="flow_gate")
+                log.info("%s: flow gate released (%d updates)", self.ticker, recent)
 
         # 2026-08-06 (M4): external spot-jump pull — cancel and stay out until
         # the deadline passes. Checked before the gate so a jump pull works
