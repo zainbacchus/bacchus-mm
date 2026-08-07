@@ -7,21 +7,35 @@ critique it later.** You run the bot; your logs become the dataset you
 iterate on. The strategies have changed as the data came in; the logging
 loop is the product that survived.
 
-**In plain English:** it runs little currency-exchange booths inside
-prediction markets, earning fractions of a cent on the gap between buy and
-sell prices, thousands of times. The craft is not making the pennies; it is
-avoiding getting run over by people who know something you don't. This repo
-is the working diary of learning where that is possible: the first strategy
-(calm, slow markets) was measured, found unprofitable, and retired with a
-written retrospective. The active experiment is its replacement.
+**In plain English:** a market maker is the currency-exchange booth at the
+airport. It posts one price to buy and a slightly higher price to sell, and
+lives on the gap between them. This bot runs tiny booths inside Kalshi's
+15-minute yes/no markets ("will Bitcoin be higher in 15 minutes?"): it
+stands ready to buy the YES side a fraction of a cent below the going rate
+and to sell it a fraction above, and a completed round trip earns that
+fraction. Thousands of round trips a day, pennies at a time.
+
+The catch is that some customers at the booth know the exchange rate is
+about to move, and they only trade with you when you are about to be wrong.
+So nearly all of the bot's intelligence goes into REFUSING trades: it stands
+down when a market goes quiet (the casual traders leave, only the sharp ones
+remain), cancels its offers the instant the underlying price jumps, refuses
+the side of extreme markets that history says loses, and caps how much it
+can be wrong in any single market. Then everything it did is written down,
+and the written record is what improves: strategies here get measured,
+kept, or retired based on what the diary says. The first strategy (calm,
+slow markets) was measured, found unprofitable, and retired with a
+retrospective; the current one is its data-driven replacement.
 
 ## Current status: Phase D (active)
 
-`bacchus-mm fifteen --live` quotes Kalshi's **15-minute up/down markets**
-(BTC, ETH, SOL, DOGE, BNB, HYPE, NEAR, Gold, Silver): join-the-touch, one
-contract per side, rolling to each new 15-minute window as it opens. No
-pricing model at all, on purpose. Three measured facts drive the design
-(see [research/](research/)):
+`bacchus-mm fifteen --live` quotes Kalshi's **15-minute up/down markets**:
+join-the-touch, one contract per side, rolling to each new 15-minute window
+as it opens. The active series list lives in `config.yaml` and is managed by
+the daily review loop below (currently BTC, Gold, Silver, and WTI crude; the
+alt-crypto series were measured negative and dropped). No pricing model at
+all, on purpose. Three measured facts drive the design (see
+[research/](research/)):
 
 1. The market's own mid out-predicted a spot-feed fair-value model at every
    minute of window life, so the bot joins the book instead of pricing it.
@@ -61,6 +75,34 @@ own attribution telemetry so reviews can score them separately):
    maker's real edge is refusing to be the stale quote (Budish et al.).
    Series without a free spot feed run without this lever, a natural
    control group.
+
+## The self-improvement loop
+
+The bot never edits itself. The loop that improves it has exactly two human
+checkpoints and runs daily:
+
+1. **The bot trades and logs** (fly.io, 24/7): every quote decision, order,
+   fill, and safety-lever action, with enough context to replay it.
+2. **Every morning a scheduled cloud agent reviews the day.** A claude.ai
+   routine pulls the fills and settlement results using committed, read-only
+   code ([research/daily_review.py](research/daily_review.py)), writes the
+   day's review into `research/daily/`, and opens a pull request: headline
+   expectancy with error bars, per-series verdicts, tilt evidence, anomaly
+   checks, and at most three config proposals with the evidence rows quoted.
+   Statistical humility is enforced: evidence that does not clear the bar
+   produces explicit HOLDs, not tweaks.
+3. **A human merges and deploys.** Review PRs that only record the day merge
+   on sight; a PR carrying a PROPOSAL commit changes `config.yaml` and takes
+   effect only after the owner merges AND redeploys. Nothing reaches the
+   live bot without both.
+
+The routine cannot trade (read-only calls from committed code only), cannot
+touch bot source, and must self-report any deviation from its rules; its
+first run did exactly that, flagging two ad hoc read-only calls it made and
+the rule was tightened the same day. Deeper attribution work (per-lever
+effects from the bot's decision logs) happens in interactive sessions; the
+routine guarantees the settled truth gets measured every single day, the
+same way, against the account balance.
 
 ## The retired strategy (and why it is still in the repo)
 

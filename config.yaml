@@ -14,17 +14,22 @@ live:
 # x $1 per series plus the account-level kill switch above. The measurement
 # (real fill rate + conditional edge vs settlement) is the product.
 fifteen:
-  # 2026-08-07 (owner decision): focus on BTC + GOLD. First-evening settled
-  # results (2,366 fills): these two ran near flat at the highest volume
-  # (BTC -0.6c/ct on 122 ct/window, GOLD -0.5c on 98) while the other seven
-  # bled, worst in thin windows (-13 to -24c/ct). They were also the top two
-  # in the pre-launch studies. Find a config that is positive HERE first;
-  # re-expansion is a data decision, not a default.
+  # 2026-08-07 (owner decision): focus on BTC + GOLD, expanded same day with
+  # SILVER + WTI once lifetime per-series numbers were in. Evidence (40h,
+  # settled vs fills): SILVER +1.22c/ct on 215 ct was the BEST of all nine
+  # series (it was cut in the blanket seven-series cull, not by its own
+  # data); GOLD +0.04 and BTC -0.17 near flat at the highest volume; WTI is
+  # new to us (200+ settled windows exist, cent grid, live 1c-spread book)
+  # and joins as a measurement series in the same commodity regime as GOLD.
+  # Alt-crypto cohort stays out (NEAR -4.78, SOL -1.32, DOGE -0.87,
+  # HYPE -0.48 c/ct); XRP15M is more of the same cohort and ADA15M is listed
+  # but has zero settled history. Re-expansion beyond this is a data
+  # decision via the daily review loop.
   series:
     - KXBTC15M
     - KXGOLD15M
-  # (removed 2026-08-07: KXETH15M, KXSOL15M, KXDOGE15M, KXBNB15M, KXHYPE15M,
-  #  KXNEAR15M, KXSILVER15M — all measured negative on the first evening)
+    - KXSILVER15M
+    - KXWTI15M
   quote_size: 1 # measurement size; scaling is a NEW experiment (own size moves the queue)
   max_contracts_per_market: 5
   pull_seconds_before_close: 75 # last 60s is the settlement averaging window
