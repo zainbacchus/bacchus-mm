@@ -32,6 +32,37 @@ one deploy winds down legacy positions AND starts the measurement). Notable
 reality-check from the build: crypto 15M price grids are PIECEWISE (0.001
 tails / 0.01 middle, verified live), not uniform decicent as assumed below.
 
+STATUS 2026-08-07: active series BTC, ETH, GOLD, SILVER, WTI (alt-crypto
+cohort measured negative and dropped: NEAR -4.78, SOL -1.32, DOGE -0.87,
+HYPE -0.48 c/ct; BNB benched pending a cohort-beating case). Five evidence
+levers live (M1 tilt, M2 toxicity pull, M3 dollar caps, M4 spot-jump pull,
+M5 flow gate — see CLAUDE.md). Kill switch $30. A daily cloud routine
+reviews settled results and PRs proposals (CLAUDE.md "Daily review
+routine"). First clean read since the focus config: roughly flat.
+
+Next-lever evidence queue (work these IN ORDER of evidence, via the daily
+reviews + interactive attribution sessions):
+1. SCHEDULED-RELEASE PULL (M6 candidate): the commodities have no tick feed
+   for M4, but their jump moments are on a CALENDAR — EIA Petroleum Status
+   (Wed 10:30 ET) for WTI, CPI (8:30 ET) and FOMC (14:00 ET) days for
+   GOLD/SILVER. Pull quotes for +/- a few minutes around scheduled releases.
+   Cheap, deterministic, and the exact defensive lever those series lack.
+2. BOOK-IMBALANCE CONDITION: quote_decision already logs join_depth on both
+   sides. Mine fills-vs-settlement conditional on the imbalance at join
+   (Cont/Stoikov OBI literature says this is the strongest single
+   microstructure signal). If thin-opposite-side joins are toxic, add an
+   imbalance gate.
+3. TILT WALK-DOWN: calibration says early-window favorites at 0.65-0.90
+   carried the biggest edge (+2.7 to +3.1c, ~4 sigma). Test
+   tilt_tail_threshold 0.90 -> 0.65 ONLY once per-lever attribution shows
+   M1's current suppressions are net-positive.
+4. HOUR-OF-DAY MAP: per-series expectancy by hour (the flow gate handles
+   thin books reactively; data may justify hard schedules, e.g. commodities
+   only during US market hours).
+5. WEEKEND REGIME: underlying commodity markets close weekends — verify
+   what KXGOLD/SILVER/WTI 15M windows do on Saturday and that the flow gate
+   stands down as designed. First weekend under measurement: 2026-08-08/09.
+
 Build (mode `fifteen`, keeps the calm-MM path intact for the record):
 
 1. Static 15M universe, no selector: all nine series (KXBTC15M, KXETH15M,

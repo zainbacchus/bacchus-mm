@@ -27,6 +27,24 @@ kept, or retired based on what the diary says. The first strategy (calm,
 slow markets) was measured, found unprofitable, and retired with a
 retrospective; the current one is its data-driven replacement.
 
+## The goal, stated plainly
+
+Test whether a small passive market-making bot on Kalshi's 15-minute
+markets can earn **at least 2x the risk-free rate, annualized, on
+$500-$20,000 of capital**. Risk-free is ~4%, so the bar is ~8%/yr: about
+11 cents/day on $500, about $4.40/day on $20K. At current fill volume that
+is a fraction of a cent per contract of positive expectancy, so the whole
+project reduces to one measurable question: **is settled-PnL-per-contract
+positive, with a confidence interval that excludes zero?**
+
+Current phase: measurement at 1-contract size. Decision rules: each market
+series earns or loses its slot on its own settled numbers via the daily
+review; a positive series gets a size walk-up (its own experiment, since our
+size moves our queue position); if no configuration measures positive, the
+project concludes and the repo stands as the documented map of why. Hard
+floor under all of it: a $30 cumulative-drawdown kill switch on a ~$500
+bankroll.
+
 ## Current status: Phase D (active)
 
 `bacchus-mm fifteen --live` quotes Kalshi's **15-minute up/down markets**:
@@ -75,6 +93,12 @@ own attribution telemetry so reviews can score them separately):
    maker's real edge is refusing to be the stale quote (Budish et al.).
    Series without a free spot feed run without this lever, a natural
    control group.
+5. *Flow gate*: quote only while the book is demonstrably alive (a minimum
+   number of book updates in the trailing window). First-evening data:
+   windows with plentiful fills ran near flat while thin windows ran -13 to
+   -24c/contract, because when casual flow disappears the only remaining
+   counterparties are informed ones. Standing down IS the position; it
+   doubles as an automatic overnight curfew.
 
 ## The self-improvement loop
 

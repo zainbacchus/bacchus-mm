@@ -250,9 +250,53 @@ exits on it).
   - M4 spot-jump pull (`spot_jump_*`, spot_feed task): Coinbase move >= 8bps
     in 10s cancels that series' quotes 20s. PULL ONLY — the spot feed must
     never price (the pricing model measurably lost to the book; see
-    research/ARB-AND-15MIN-STUDY-2026-08-06.md). BNB/HYPE/GOLD/SILVER have
-    no feed and run without M4. Telemetry: fifteen_spot_pull, order_canceled
-    reason=spot_jump.
+    research/ARB-AND-15MIN-STUDY-2026-08-06.md). Only series with a mapped
+    feed get M4 (BTC/ETH today; the commodities have no free tick feed).
+    Telemetry: fifteen_spot_pull, order_canceled reason=spot_jump.
+  - M5 flow gate (`flow_min_updates`/`flow_window_seconds`): quote only
+    while the book shows real activity; cold workers START gated until the
+    book proves itself. Evidence: first-evening thin windows ran -13 to
+    -24c/ct (informed-only flow). Doubles as the overnight auto-curfew.
+    Telemetry: quotes_pulled/quotes_resumed reason=flow_gate.
+
+## Measurement rules (2026-08-07 — violations produced a fake +0.56c read)
+
+- Measure settled-fills-vs-settlement from a FIXED t0, unsegmented, via
+  `research/daily_review.py` (it encodes both rules below). NEVER diff two
+  "since X" snapshots: each excludes its trailing unsettled windows, and the
+  worst windows fall between the cracks of consecutive reads.
+- REST /portfolio/fills sign convention (pinned empirically against the
+  bot's own logged fills): `action` is already the yes-equivalent direction
+  (buy=+, sell=-); `side` is which token PRINTED, not our direction. Using
+  (side, action) jointly fabricated a fake -$75 read once.
+- Anchor every review against account balance (/portfolio/balance); if
+  equity moved much more than settled PnL explains, say so loudly.
+
+## Daily review routine (cloud, 2026-08-07)
+
+- claude.ai routine `trig_01Lkn8BE1Ubwy5myTmjRwrVE`, daily 12:00 UTC, model
+  sonnet: clones this repo, runs research/daily_review.py (read-only GETs),
+  opens a "Daily review <date>" PR with interpretation + at most three
+  evidence-quoted proposals (explicit HOLDs when evidence is unclear).
+  Config diffs ride as separate PROPOSAL commits; merging never deploys —
+  the owner redeploys in the fly UI. Update the prompt via the RemoteTrigger
+  tool (or claude.ai/code/routines). Its env (Kalshi keys, network allowlist
+  for api.elections.kalshi.com, GitHub write) is configured at claude.ai by
+  the owner, never through chat. Deep attribution (quote_decision, lever
+  telemetry, guard stats — fly-DB data) stays in interactive sessions.
+
+## Stall diagnostics (2026-08-07 incident tooling — leave them in)
+
+- `loop_lag` events + log lines: the in-loop probe; any stall report should
+  start by checking for these (present = our loop froze; absent = network).
+- STALL WATCHDOG log lines: a daemon thread stack-samples the loop when the
+  heartbeat goes silent >1.5s — the blocking frame appears verbatim in the
+  log. This is how the O(n)-per-update guard/book scans were caught; both
+  hot paths are now O(1) (monotonic-deque window min; incremental book
+  best) with fuzz tests pinning equivalence.
+- Slow REST warnings during a freeze are partly SYMPTOM: an in-flight
+  request cannot resume while the loop is blocked, so its measured duration
+  inflates by the stall.
 
 ## Conventions
 

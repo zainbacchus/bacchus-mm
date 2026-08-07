@@ -28,7 +28,7 @@ fly auth signup              # new to fly.io — creates the account (browser op
 fly auth login
 ```
 
-Requires a credit card on file; cost is ~$2/mo (see §10).
+Requires a credit card on file; cost is ~$11/mo at the current VM size (see §10).
 
 ## 2. Create the app
 
@@ -201,15 +201,16 @@ sweep cancels any stragglers on managed tickers — brief overlap is safe.
 
 ## 10. Cost
 
-Verified against https://fly.io/docs/about/pricing/ (2026-07-17):
+Verified against https://fly.io/docs/about/pricing/ (2026-07-17; VM resized
+2026-08-06 after the 15-minute firehose starved shared-cpu-1x):
 
-- shared-cpu-1x, 256MB, running 24/7: **$1.94/mo**
+- shared-cpu-2x, 1GB, running 24/7: **~$10.70/mo** (calm-mode history: the
+  original shared-cpu-1x/256MB was ~$1.94/mo)
 - 1GB volume: **$0.15/mo**
 - bandwidth: websocket/REST trickle, effectively free at these rates
 
-**≈ $2.10/mo all-in** (call it $2–5 with headroom). Snapshots: daily
-auto-snapshots of the volume are on by default; first 10GB of snapshot storage
-is free.
+**~$11/mo all-in.** Snapshots: daily auto-snapshots of the volume are on by
+default; first 10GB of snapshot storage is free.
 
 ## 11. The laptop becomes a read-only analysis station
 
