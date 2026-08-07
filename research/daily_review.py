@@ -151,6 +151,12 @@ def build_ledger(all_fills: list, results: dict, ledger_days: int,
     REVIEW files, where the balance-vs-settled-PnL reconciliation check
     reads it).
 
+    Maker vs taker: the bot is post-only, so EVERY fill should be a maker
+    fill. The taker_fills and taker_fees_usd columns are TRIPWIRES, not a
+    breakdown: any nonzero value is a post-only invariant breach and must be
+    treated as an incident. (All fees to date are maker fees from
+    Non-Standard-table legacy series; the 15M series charge makers nothing.)
+
     Contracts can be FRACTIONAL: Kalshi's 15-minute markets trade in
     fractional contracts (counterparties can submit dollar amounts, e.g.
     $5 at 37c = 13.51 contracts), so our whole-contract orders can fill in
@@ -161,8 +167,9 @@ def build_ledger(all_fills: list, results: dict, ledger_days: int,
     rows older than the window are preserved verbatim from the existing CSV.
     """
     existing: dict[str, dict] = {}
-    header = ["date", "fills", "markets", "contracts", "settled_contracts",
-              "volume_usd", "cum_volume_usd", "fees_usd", "cum_fees_usd",
+    header = ["date", "fills", "taker_fills", "markets", "contracts",
+              "settled_contracts", "volume_usd", "cum_volume_usd",
+              "fees_usd", "cum_fees_usd", "taker_fees_usd",
               "realized_pnl_usd", "cum_realized_pnl_usd"]
     if dest_csv.exists():
         lines = dest_csv.read_text().strip().splitlines()
@@ -173,8 +180,9 @@ def build_ledger(all_fills: list, results: dict, ledger_days: int,
 
     window_start = datetime.now(timezone.utc).timestamp() - ledger_days * 86400
     days: dict[str, dict] = collections.defaultdict(
-        lambda: dict(fills=0, markets=set(), contracts=0.0, settled_ct=0.0,
-                     volume=0.0, fees=0.0, pnl=0.0))
+        lambda: dict(fills=0, taker=0, markets=set(), contracts=0.0,
+                     settled_ct=0.0, volume=0.0, fees=0.0, taker_fees=0.0,
+                     pnl=0.0))
     for x in all_fills:
         created = x.get("created_time")
         if not created:
@@ -188,6 +196,9 @@ def build_ledger(all_fills: list, results: dict, ledger_days: int,
         p_paid = yp if x.get("action") == "buy" else (1.0 - yp)
         d = days[day]
         d["fills"] += 1
+        if x.get("is_taker"):
+            d["taker"] += 1
+            d["taker_fees"] += f(x.get("fee_cost")) or 0.0
         d["markets"].add(x.get("ticker", ""))
         d["contracts"] += abs(ct)
         d["volume"] += abs(ct) * p_paid
@@ -211,6 +222,7 @@ def build_ledger(all_fills: list, results: dict, ledger_days: int,
     for day, d in days.items():
         rows[day] = {
             "date": day, "fills": str(d["fills"]),
+            "taker_fills": str(d["taker"]),
             "markets": str(len(d["markets"])),
             "contracts": f"{d['contracts']:.1f}",
             "settled_contracts": f"{d['settled_ct']:.1f}",
@@ -218,6 +230,7 @@ def build_ledger(all_fills: list, results: dict, ledger_days: int,
             "cum_volume_usd": "",  # filled below
             "fees_usd": f"{d['fees']:.4f}",
             "cum_fees_usd": "",  # filled below
+            "taker_fees_usd": f"{d['taker_fees']:.4f}",
             "realized_pnl_usd": f"{d['pnl']:.2f}",
             "cum_realized_pnl_usd": "",  # filled below
         }
@@ -246,13 +259,18 @@ def render_ledger_md(ordered: list[dict], dest_md: Path, tail: int = 30) -> None
            "Note: contracts can be fractional - Kalshi's 15-minute markets",
            "let counterparties trade dollar amounts (e.g. $5 at 37c = 13.51",
            "contracts), so whole-contract orders fill in pieces.", "",
-           "| date | fills | markets | contracts | volume $ | cum volume $ | fees $ | cum fees $ | pnl $ | cum pnl $ |",
-           "|---|---|---|---|---|---|---|---|---|---|"]
+           "All fills should be MAKER fills (post-only bot): the taker",
+           "columns are tripwires, and any nonzero value is an invariant",
+           "breach to treat as an incident.", "",
+           "| date | fills | taker | markets | contracts | volume $ | cum volume $ | fees $ | cum fees $ | taker fees $ | pnl $ | cum pnl $ |",
+           "|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for r in ordered[-tail:]:
         out.append(
-            f"| {r['date']} | {r['fills']} | {r['markets']} | {r['contracts']} "
+            f"| {r['date']} | {r['fills']} | {r['taker_fills']} | {r['markets']} "
+            f"| {r['contracts']} "
             f"| {float(r['volume_usd']):,.2f} | {float(r['cum_volume_usd']):,.2f} "
             f"| {r['fees_usd']} | {float(r['cum_fees_usd']):.4f} "
+            f"| {r['taker_fees_usd']} "
             f"| {float(r['realized_pnl_usd']):+.2f} | {float(r['cum_realized_pnl_usd']):+.2f} |")
     out.append("")
     dest_md.write_text("\n".join(out))
