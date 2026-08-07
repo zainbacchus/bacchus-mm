@@ -262,6 +262,10 @@ class KalshiExchange(ExchangeAdapter):
         url = f"{self.rest_url}{path}"
         session = await self._http()
         last_err: Exception | None = None
+        # 2026-08-07 stall investigation: time every REST round trip. Slow
+        # requests WITHOUT loop_lag events = network/Kalshi latency; slow
+        # requests WITH them = our loop was frozen. See fifteen.loop_lag_probe.
+        t_req = time.monotonic()
         for attempt in range(retries + 1):
             headers = {}
             if authed:
@@ -282,10 +286,18 @@ class KalshiExchange(ExchangeAdapter):
                         raise KalshiApiError(resp.status, f"{method} {path}: {text[:500]}")
                     if resp.status == 204:
                         return {}
-                    return await resp.json()
+                    out = await resp.json()
+                    dur = time.monotonic() - t_req
+                    if dur > 5.0:
+                        log.warning("slow REST %s %s: %.1fs (attempt %d)",
+                                    method, path, dur, attempt)
+                    return out
             except aiohttp.ClientError as e:
                 last_err = e
                 await asyncio.sleep(0.5 * 2**attempt)
+        dur = time.monotonic() - t_req
+        if dur > 5.0:
+            log.warning("slow REST %s %s: FAILED after %.1fs", method, path, dur)
         raise last_err or RuntimeError(f"{method} {path} failed")
 
     async def list_markets(self) -> list[MarketInfo]:

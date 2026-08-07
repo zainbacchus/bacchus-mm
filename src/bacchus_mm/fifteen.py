@@ -687,6 +687,20 @@ async def run_fifteen(cfg: Config, live: bool, dry_run: bool) -> None:
                             )
                     await asyncio.sleep(p.spot_poll_seconds)
 
+        async def loop_lag_probe():
+            """2026-08-07 stall investigation: the decisive discriminator.
+            sleep(1) oversleeping means the LOOP itself was frozen (blocked
+            stdout, a sync call) — network latency to Kalshi cannot cause
+            this. Correlate loop_lag events with order_placement_unknown and
+            health-probe failures to attribute stalls."""
+            while not stop_event.is_set():
+                t0 = time.monotonic()
+                await asyncio.sleep(1.0)
+                lag = time.monotonic() - t0 - 1.0
+                if lag > 0.5:
+                    events.emit("loop_lag", lag_seconds=round(lag, 3))
+                    log.warning("event-loop lag %.2fs (loop was blocked)", lag)
+
         async def risk_loop():
             last_kv_persist = time.monotonic()
             while not stop_event.is_set():
@@ -744,6 +758,7 @@ async def run_fifteen(cfg: Config, live: bool, dry_run: bool) -> None:
         _spawn(pull_loop(), "pull_loop")
         if p.spot_jump_bps and p.spot_products:
             _spawn(spot_feed(), "spot_feed")  # M4; runs in observe too (telemetry)
+        _spawn(loop_lag_probe(), "loop_lag_probe")  # 2026-08-07 stall instrumentation
         _spawn(risk_loop(), "risk_loop")
         _spawn(eventlog_flush_loop(), "eventlog_flush")
         _spawn(marks_loop(), "marks_loop")

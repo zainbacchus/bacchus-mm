@@ -1089,10 +1089,25 @@ def cli() -> None:
     an.add_argument("--hours", type=float, default=24.0)
 
     args = parser.parse_args()
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
+    # 2026-08-07: log through a queue so the event loop NEVER blocks on
+    # stdout. On fly, stdout is a pipe into the platform's log collector; if
+    # the collector stalls, a blocking StreamHandler freezes the whole asyncio
+    # loop mid-log-line — the signature seen live: health probe and REST calls
+    # timing out together while CPU sits idle and disk is fast. The
+    # QueueListener thread absorbs pipe stalls; the loop just enqueues.
+    import atexit
+    import logging.handlers
+    import queue as _queue
+
+    _log_q: _queue.SimpleQueue = _queue.SimpleQueue()
+    _stream = logging.StreamHandler()
+    _stream.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)-7s %(name)s: %(message)s")
     )
+    _listener = logging.handlers.QueueListener(_log_q, _stream)
+    _listener.start()
+    atexit.register(_listener.stop)
+    logging.basicConfig(level=logging.INFO, handlers=[logging.handlers.QueueHandler(_log_q)])
     root = Path(args.root)
     _load_env_file(root)
     cfg = Config.load(root)
