@@ -18,11 +18,15 @@ fabricate fills). Window: since the levers went live 2026-08-06T23:42Z.
 
 ## Result (491 settled suppressed market-minutes)
 
-| suppression | minutes | counterfactual PnL | per minute |
+Sign convention, stated twice because the owner caught the first version
+mixing them in one column: "counterfactual PnL" is what the DECLINED fills
+would have earned; the BENEFIT of suppressing is its negation.
+
+| suppression | minutes | counterfactual PnL of declined fills | benefit of suppressing |
 |---|---|---|---|
-| sell_favorite (ask >= 0.90) | 286 | -$8.59 (declined fills would have LOST) | -3.0c |
-| buy_longshot (bid <= 0.10) | 205 | +$5.09 (declined fills would have won) | +2.5c |
-| net | 491 | +$3.50 avoided | |
+| sell_favorite (ask >= 0.90) | 286 | -$8.59 (would have LOST) | +$8.59 avoided |
+| buy_longshot (bid <= 0.10) | 205 | +$5.09 (would have won) | -$5.09 foregone |
+| net | 491 | -$3.50 | +$3.50 avoided |
 
 ## Reading it honestly
 
