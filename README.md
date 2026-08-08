@@ -201,6 +201,49 @@ here) filters out most bots below. The moat is cost structure plus
 competence, not speed - which is also why scaling the bot would erode the
 very mismatch that makes the niche exist.
 
+## The latency budget (why the edge is selection, not speed)
+
+A natural question: would a faster implementation (a compiled language, a
+faster box) capture more spread? Budget the reflex arc first. From "the
+world changed" to "our order changed", a requote or a defensive pull
+spends roughly:
+
+| Link in the chain | Typical cost |
+|---|---|
+| Market data transit (Kalshi / Coinbase websocket to the box) | a few to tens of ms |
+| Processing the update in Python (O(1) hot paths) | 1-2 microseconds |
+| Deciding (join-touch policy, guards, caps) | microseconds |
+| Deliberate requote throttle (`fifteen.requote_min_interval`) | 2,000 ms |
+| Order or cancel REST round trip to Kalshi | 50-300 ms, sometimes seconds |
+| Queue standing at the exchange | not time at all: FIFO priority |
+
+The code's share of that chain is about 0.001%. Rewriting it in a faster
+language would shave microseconds off a path that is priced in
+milliseconds and throttled in seconds. The repo's one real performance
+incident (the 2026-08-07 event-loop stalls) was an algorithms problem,
+O(n) scans on every book update, and the fix was data structures (a
+monotonic-deque window minimum, an incremental best-price cache), not a
+faster language. At these message rates the interpreter is nowhere near
+its ceiling.
+
+If speed ever did matter, the honest upgrade path attacks the big links
+first: lower the throttle (rate-limit tier permitting), colocate next to
+Kalshi's matching engine, tune order entry (connection reuse, FIX), and
+only then reconsider the language - and the exchange's rate limits cap
+requote frequency no matter what the code is written in. Each step gets
+taken only after a review attributes a measured loss to pull latency or
+queue position; none has yet.
+
+The deeper reason there is no speed work on the roadmap: the measured
+edge is selection, not reaction. The ledger's per-contract numbers say
+BTC, the one book where latency-competitive desks live, pays this bot's
+worst edge, while the neglected books pay multiples more. Speed decides
+who wins the race to a newly formed price level; this bot's PnL comes
+from refusing bad fills (the tilt, the flow gate, the pulls, the caps),
+a game decided at the decision, not on the wire. Getting faster would
+not move the selection numbers; it would enter the bot in a race the
+professionals already win.
+
 ## How it works
 
 - **Window discovery (fifteen)**: polls each configured series for its open

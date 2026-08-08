@@ -75,6 +75,16 @@ reviews + interactive attribution sessions):
    evidence still. Decision rule: 3-4 settled days, keep or drop on
    numbers via the daily review.
 
+Deliberately NOT on the queue: speed. The reflex arc is network and
+exchange round trips (50-300 ms) plus a deliberate 2 s requote throttle;
+the code's share is microseconds after the 2026-08-07 O(1) fixes (see
+README "The latency budget"). If a review ever attributes measured loss to
+pull latency or queue position, the upgrade path is throttle -> colocation
+-> order-entry protocol -> language, in that order, each step justified by
+a number first. The edge under test is selection (which fills we refuse),
+not reaction speed: BTC, the fastest book, pays our worst per-contract
+edge.
+
 Build (mode `fifteen`, keeps the calm-MM path intact for the record):
 
 1. Static 15M universe, no selector: all nine series (KXBTC15M, KXETH15M,
