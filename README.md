@@ -156,6 +156,27 @@ the published literature (the large calibration papers exclude prices beyond
 5c/95c and stop at the 1-hour horizon; ours measures exactly that regime and
 finds the favorite-longshot tilt alive at 15 minutes).
 
+## Why Kalshi (the venue landscape)
+
+The US prediction-market boom is a distribution war (Coinbase, Robinhood,
+apps) sitting on top of very few actual order books. Coinbase's prediction
+markets route to Kalshi; Robinhood routes across Kalshi, ForecastEx, and
+its own Rothera exchange, and its BTC 15-minute markets carry Kalshi's
+exact contract spec. Retail flow from the big apps therefore aggregates
+onto the books this bot quotes.
+
+Kalshi is also the only one of these venues with an OPEN maker API, and
+the reason is business model, not accident: standalone exchanges sell
+liquidity, so they give the spread to anyone willing to quote (Kalshi
+charges makers nothing on most series). Broker-built venues sell their own
+captive flow to affiliated makers (Rothera is a Robinhood-Susquehanna
+joint venture), so they stay closed on purpose. This bot's entire niche is
+that exception, and the niche is stage-dependent: if the venue ever drifts
+toward flow capture (house makers, broad maker fees), the edge narrows.
+The daily review watches the fee schedule for exactly that reason. Venue
+diligence lives in research/ (see the Crypto.com census for a worked
+example of a venue that fails the test).
+
 ## How it works
 
 - **Window discovery (fifteen)**: polls each configured series for its open
