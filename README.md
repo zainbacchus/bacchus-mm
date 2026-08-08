@@ -50,8 +50,8 @@ bankroll.
 `bacchus-mm fifteen --live` quotes Kalshi's **15-minute up/down markets**:
 join-the-touch, one contract per side, rolling to each new 15-minute window
 as it opens. The active series list lives in `config.yaml` and is managed by
-the daily review loop below (currently BTC, Gold, Silver, and WTI crude; the
-alt-crypto series were measured negative and dropped). No pricing model at
+the daily review loop below (currently BTC, ETH, Gold, Silver, and WTI
+crude; the alt-crypto series were measured negative and dropped). No pricing model at
 all, on purpose. Three measured facts drive the design (see
 [research/](research/)):
 
@@ -70,16 +70,17 @@ window), and fills ride to settlement with hard inventory caps. Windows
 whose price structure the bot cannot fully parse are refused, not guessed
 at. See [ROADMAP.md](ROADMAP.md) Phase D for the full spec.
 
-On top of the symmetric join, four **evidence levers** shape which fills the
+On top of the symmetric join, six **evidence levers** shape which fills the
 bot declines (each independently disable-able in config, each logging its
 own attribution telemetry so reviews can score them separately):
 
-1. *Favorite-longshot tilt*: in the tails, never sell the favorite or buy
-   the longshot. Calibrated on 1,440 settled 15-minute windows: favorites
-   at 0.98-1.00 settle +0.57c/contract above their price (n=2,005, ~4
-   sigma); the longshot mirror is negative. Consistent with Buergi, Deng &
-   Whelan (2026), who find Kalshi makers on >=50c contracts earn +2.6%
-   after fees.
+1. *Favorite-longshot tilt*: never sell the favorite or buy the longshot
+   beyond the threshold (0.65 as of 2026-08-08). First calibrated on 1,440
+   settled windows, then walked down when the bot's own fills showed the
+   0.10-0.35 band losing 7.29c/contract and the 0.65-0.90 band earning
+   7.83c, both beyond 5 sigma, with live-log attribution confirming the
+   suppressions were net-positive. Consistent with Buergi, Deng & Whelan
+   (2026), who find Kalshi makers on >=50c contracts earn +2.6% after fees.
 2. *Toxicity pull*: quotes are pulled during one-sided repricing bursts
    (one-sided flow predicts maker losses; Bartlett 2026) and resume after a
    short cooloff.
@@ -99,6 +100,11 @@ own attribution telemetry so reviews can score them separately):
    -24c/contract, because when casual flow disappears the only remaining
    counterparties are informed ones. Standing down IS the position; it
    doubles as an automatic overnight curfew.
+6. *Scheduled-release pull*: the commodities have no tick feed for the
+   spot-jump lever, but their jump moments are on a calendar. Quotes are
+   pulled for a few minutes around scheduled releases (EIA petroleum status
+   weekly for WTI; CPI and FOMC dates for the metals and majors),
+   maintained by the daily review.
 
 ## The self-improvement loop
 
