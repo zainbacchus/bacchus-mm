@@ -183,6 +183,24 @@ The daily review watches the fee schedule for exactly that reason. Venue
 diligence lives in research/ (see the Crypto.com census for a worked
 example of a venue that fails the test).
 
+### Who else is at the booth, and why there is room
+
+Professional market makers ARE on these books and capture most of the
+spread; this bot's flow is a rounding error beside theirs. Three things
+leave crumbs at the margin. Price-time queues churn: pros cancel and
+requote constantly, and every cancel promotes the small order behind them.
+Retail flow arrives in sweeps that punch through displayed size to whoever
+is next. And professional attention concentrates where volume justifies a
+desk, leaving the long tail thin - a pattern this repo's own ledger
+confirms: BTC, the most professionalized book, shows the bot's worst
+per-contract edge (near perfect competition), while the newest and
+smallest series show its best. The niche is a size window: the prize is
+too small for a salaried desk above, and the operational bar (fee
+forensics, adverse selection, measurement discipline - all documented
+here) filters out most bots below. The moat is cost structure plus
+competence, not speed - which is also why scaling the bot would erode the
+very mismatch that makes the niche exist.
+
 ## How it works
 
 - **Window discovery (fifteen)**: polls each configured series for its open
