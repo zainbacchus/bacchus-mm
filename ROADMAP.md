@@ -62,6 +62,18 @@ reviews + interactive attribution sessions):
 5. WEEKEND REGIME: underlying commodity markets close weekends — verify
    what KXGOLD/SILVER/WTI 15M windows do on Saturday and that the flow gate
    stands down as designed. First weekend under measurement: 2026-08-08/09.
+6. SERIES RE-ENTRY PROBE (queued 2026-08-08, run AFTER the tilt walk-down
+   has 1-2 clean settled days): the alt-crypto cull was measured almost
+   entirely PRE-LEVERS, so "toxic" is not settled law. But neglect only
+   pays when the underlying is tame (commodities > BTC per contract, while
+   neglected-and-wild alts bled), so probes must meet criteria, not
+   sentiment: (a) never measured negative by us, (b) Coinbase spot feed so
+   M4 covers them, (c) enters behind all six levers at 1-lot. Candidates:
+   KXXRP15M and KXZEC15M (add their spot_products mappings XRP-USD,
+   ZEC-USD when adding). BNB/HYPE re-entry requires the probe cohort to
+   first prove the levers tame alt flow; NEAR/SOL/DOGE need stronger
+   evidence still. Decision rule: 3-4 settled days, keep or drop on
+   numbers via the daily review.
 
 Build (mode `fifteen`, keeps the calm-MM path intact for the record):
 
