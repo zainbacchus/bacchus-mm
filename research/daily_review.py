@@ -292,14 +292,16 @@ def render_ledger_md(ordered: list[dict], dest_md: Path, tail: int = 30) -> None
 
 
 def render_ledger_chart(ordered: list[dict], dest_svg: Path, tail: int = 35) -> None:
-    """Committed SVG time series: daily volume (blue bars) over daily net PnL
-    (diverging blue/red bars around zero). Two stacked panels sharing the
-    date axis - never a dual-axis chart. Palette validated (dataviz method):
-    light #2a78d6/#e34948, dark #3987e5/#e66767 on their surfaces; text in
-    text tokens, not series colors; bars carry native <title> tooltips
-    (survive GitHub's SVG sanitizer); x positions are DATE-scaled so no-trade
-    days appear as honest gaps."""
+    """Committed SVG: ONE plot, one axis (owner preference, 2026-08-08).
+    Bar HEIGHT = daily net PnL (diverging blue/red around zero, the only
+    y-axis); bar WIDTH = daily volume traded (max-width bar labeled). This
+    keeps both measures in a single chart without a dual axis - width is the
+    second encoding, so no fake second scale. Palette validated (light
+    #2a78d6/#e34948, dark #3987e5/#e66767); text wears text tokens; native
+    <title> tooltips survive GitHub's sanitizer; x is DATE-scaled so
+    no-trade days appear as honest gaps."""
     from datetime import date as _date
+    from datetime import timedelta as _td
 
     rows = ordered[-tail:]
     if not rows:
@@ -307,52 +309,43 @@ def render_ledger_chart(ordered: list[dict], dest_svg: Path, tail: int = 35) -> 
     days = [_date.fromisoformat(r["date"]) for r in rows]
     d0, d1 = days[0], days[-1]
     span = max((d1 - d0).days, 1)
-    W, H = 880, 560
+    W, H = 880, 430
     L, R = 62, 14
-    ax_top, ax_bot = 66, 268           # volume panel
-    bx_top, bx_bot = 330, 508          # pnl panel
+    top, bot = 78, 352
     iw = W - L - R
     slot = iw / (span + 1)
-    bw = max(3.0, min(16.0, slot * 0.72))
 
     def x(d):
         return L + ((d - d0).days + 0.5) * slot
 
     vols = [float(r["volume_usd"]) for r in rows]
     pnls = [float(r["net_pnl_usd"]) for r in rows]
-    vmax = max(max(vols), 1.0) * 1.08
+    vmax = max(vols)
     pmin, pmax = min(min(pnls), 0.0), max(max(pnls), 0.0)
-    pad = max((pmax - pmin) * 0.10, 0.5)
+    pad = max((pmax - pmin) * 0.12, 0.5)
     pmin, pmax = pmin - pad, pmax + pad
 
-    def vy(v):
-        return ax_bot - (v / vmax) * (ax_bot - ax_top)
+    def y(v):
+        return bot - ((v - pmin) / (pmax - pmin)) * (bot - top)
 
-    def py(v):
-        return bx_bot - ((v - pmin) / (pmax - pmin)) * (bx_bot - bx_top)
+    zero_y = y(0.0)
 
-    zero_y = py(0.0)
-
-    def bar(cx, y_from, y_to, cls, tip):
-        """Rounded at the value end only, anchored at y_from (baseline)."""
-        x0 = cx - bw / 2
-        r = min(4.0, bw / 2)
-        up = y_to < y_from
+    def bar(cx, w, y_to, cls, tip):
+        x0 = cx - w / 2
+        r = min(4.0, w / 2)
+        up = y_to < zero_y
         yv = y_to
-        if abs(y_from - y_to) < 1.0:
-            yv = y_from - 1.0 if up else y_from + 1.0
+        if abs(zero_y - y_to) < 1.0:
+            yv = zero_y - 1.0 if up else zero_y + 1.0
         if up:
-            d = (f"M{x0:.1f},{y_from:.1f} L{x0:.1f},{yv + r:.1f} Q{x0:.1f},{yv:.1f} "
-                 f"{x0 + r:.1f},{yv:.1f} L{x0 + bw - r:.1f},{yv:.1f} Q{x0 + bw:.1f},{yv:.1f} "
-                 f"{x0 + bw:.1f},{yv + r:.1f} L{x0 + bw:.1f},{y_from:.1f} Z")
+            d = (f"M{x0:.1f},{zero_y:.1f} L{x0:.1f},{yv + r:.1f} Q{x0:.1f},{yv:.1f} "
+                 f"{x0 + r:.1f},{yv:.1f} L{x0 + w - r:.1f},{yv:.1f} Q{x0 + w:.1f},{yv:.1f} "
+                 f"{x0 + w:.1f},{yv + r:.1f} L{x0 + w:.1f},{zero_y:.1f} Z")
         else:
-            d = (f"M{x0:.1f},{y_from:.1f} L{x0:.1f},{yv - r:.1f} Q{x0:.1f},{yv:.1f} "
-                 f"{x0 + r:.1f},{yv:.1f} L{x0 + bw - r:.1f},{yv:.1f} Q{x0 + bw:.1f},{yv:.1f} "
-                 f"{x0 + bw:.1f},{yv - r:.1f} L{x0 + bw:.1f},{y_from:.1f} Z")
+            d = (f"M{x0:.1f},{zero_y:.1f} L{x0:.1f},{yv - r:.1f} Q{x0:.1f},{yv:.1f} "
+                 f"{x0 + r:.1f},{yv:.1f} L{x0 + w - r:.1f},{yv:.1f} Q{x0 + w:.1f},{yv:.1f} "
+                 f"{x0 + w:.1f},{yv - r:.1f} L{x0 + w:.1f},{zero_y:.1f} Z")
         return f'<path d="{d}" class="{cls}"><title>{tip}</title></path>'
-
-    def fmt(v):
-        return f"{v:,.0f}" if abs(v) >= 100 else f"{v:,.2f}"
 
     e = []
     e.append(f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" '
@@ -360,71 +353,54 @@ def render_ledger_chart(ordered: list[dict], dest_svg: Path, tail: int = 35) -> 
     e.append("""<style>
   .bg{fill:#fcfcfb}.t1{fill:#0b0b0b}.t2{fill:#52514e}.grid{stroke:#e8e7e4;stroke-width:1}
   .zero{stroke:#a6a49d;stroke-width:1}
-  .vol{fill:#2a78d6}.pos{fill:#2a78d6}.neg{fill:#e34948}
-  text{font-size:12px}.title{font-size:15px;font-weight:600}.sub{font-size:12px}
-  .lbl{font-size:11px}
+  .pos{fill:#2a78d6}.neg{fill:#e34948}
+  text{font-size:12px}.title{font-size:15px;font-weight:600}.lbl{font-size:11px}
   @media (prefers-color-scheme: dark){
     .bg{fill:#1a1a19}.t1{fill:#ffffff}.t2{fill:#c3c2b7}.grid{stroke:#2c2c2a}
-    .zero{stroke:#6b6a64}.vol{fill:#3987e5}.pos{fill:#3987e5}.neg{fill:#e66767}
+    .zero{stroke:#6b6a64}.pos{fill:#3987e5}.neg{fill:#e66767}
   }
 </style>""")
     e.append(f'<rect class="bg" x="0" y="0" width="{W}" height="{H}"/>')
     e.append(f'<text class="t1 title" x="{L}" y="26">bacchus-mm daily ledger</text>')
-    e.append(f'<text class="t2 sub" x="{L}" y="44">Daily volume traded ($) and daily net '
-             f'PnL ($, settled, fees included) - {d0.isoformat()} to {d1.isoformat()}</text>')
+    e.append(f'<text class="t2" x="{L}" y="46">Bar height = daily net PnL ($, settled, '
+             f'fees included). Bar width = daily volume traded '
+             f'(widest: ${vmax:,.0f}). {d0.isoformat()} to {d1.isoformat()}</text>')
 
-    # ---- volume panel
-    e.append(f'<text class="t2" x="{L}" y="{ax_top - 8}">Volume $</text>')
-    step = 10 ** max(0, len(str(int(vmax))) - 1)
-    if vmax / step < 2.5:
-        step /= 2
-    v = step
-    while v < vmax:
-        yy = vy(v)
-        e.append(f'<line class="grid" x1="{L}" x2="{W - R}" y1="{yy:.1f}" y2="{yy:.1f}"/>')
-        e.append(f'<text class="t2 lbl" x="{L - 6}" y="{yy + 4:.1f}" text-anchor="end">{fmt(v)}</text>')
-        v += step
-    e.append(f'<line class="zero" x1="{L}" x2="{W - R}" y1="{ax_bot}" y2="{ax_bot}"/>')
-    imax = vols.index(max(vols))
-    for i, r in enumerate(rows):
-        cx = x(days[i])
-        e.append(bar(cx, ax_bot, vy(vols[i]), "vol",
-                     f"{r['date']}: ${fmt(vols[i])} volume, {r['fills']} fills, {r['markets']} markets"))
-        if i == imax or i == len(rows) - 1:
-            e.append(f'<text class="t2 lbl" x="{cx:.1f}" y="{vy(vols[i]) - 5:.1f}" '
-                     f'text-anchor="middle">{fmt(vols[i])}</text>')
-
-    # ---- pnl panel
-    e.append(f'<text class="t2" x="{L}" y="{bx_top - 8}">Net PnL $</text>')
-    for gv in sorted({round(pmin), 0, round(pmax)} | {round((pmin + pmax) / 2)}):
+    for gv in sorted({round(pmin), round(pmax), round((pmin + pmax) / 2)}):
         if pmin <= gv <= pmax and gv != 0:
-            yy = py(gv)
+            yy = y(gv)
             e.append(f'<line class="grid" x1="{L}" x2="{W - R}" y1="{yy:.1f}" y2="{yy:.1f}"/>')
-            e.append(f'<text class="t2 lbl" x="{L - 6}" y="{yy + 4:.1f}" text-anchor="end">{gv:+d}</text>')
+            e.append(f'<text class="t2 lbl" x="{L - 6}" y="{yy + 4:.1f}" '
+                     f'text-anchor="end">{gv:+d}</text>')
     e.append(f'<line class="zero" x1="{L}" x2="{W - R}" y1="{zero_y:.1f}" y2="{zero_y:.1f}"/>')
     e.append(f'<text class="t2 lbl" x="{L - 6}" y="{zero_y + 4:.1f}" text-anchor="end">0</text>')
+
     ibest = pnls.index(max(pnls))
     iworst = pnls.index(min(pnls))
+    ivmax = vols.index(vmax)
     for i, r in enumerate(rows):
         cx = x(days[i])
+        w = max(2.5, slot * 0.9 * (vols[i] / vmax))
         cls = "pos" if pnls[i] >= 0 else "neg"
-        e.append(bar(cx, zero_y, py(pnls[i]), cls,
-                     f"{r['date']}: {pnls[i]:+,.2f} net PnL (cum {float(r['cum_net_pnl_usd']):+,.2f})"))
+        e.append(bar(cx, w, y(pnls[i]), cls,
+                     f"{r['date']}: net {pnls[i]:+,.2f} on ${vols[i]:,.2f} volume, "
+                     f"{r['fills']} fills, {r['markets']} markets "
+                     f"(cum {float(r['cum_net_pnl_usd']):+,.2f})"))
         if i in (ibest, iworst, len(rows) - 1):
             above = pnls[i] >= 0
-            yy = py(pnls[i]) + (-5 if above else 13)
+            yy = y(pnls[i]) + (-5 if above else 13)
             e.append(f'<text class="t2 lbl" x="{cx:.1f}" y="{yy:.1f}" '
                      f'text-anchor="middle">{pnls[i]:+,.2f}</text>')
+        if i == ivmax:
+            e.append(f'<text class="t2 lbl" x="{cx:.1f}" y="{bot + 34}" '
+                     f'text-anchor="middle">${vols[i]:,.0f} vol</text>')
 
-    # ---- shared x ticks (weekly)
     tick = d0
-    from datetime import timedelta as _td
     while tick <= d1:
-        cx = x(tick)
-        e.append(f'<text class="t2 lbl" x="{cx:.1f}" y="{bx_bot + 20}" '
+        e.append(f'<text class="t2 lbl" x="{x(tick):.1f}" y="{bot + 20}" '
                  f'text-anchor="middle">{tick.strftime("%b %d")}</text>')
         tick += _td(days=7)
-    e.append(f'<text class="t2 lbl" x="{W - R}" y="{H - 12}" text-anchor="end">'
+    e.append(f'<text class="t2 lbl" x="{W - R}" y="{H - 10}" text-anchor="end">'
              f'settled-only PnL attributed to fill day; source: LEDGER.csv</text>')
     e.append("</svg>")
     dest_svg.write_text("\n".join(e))
