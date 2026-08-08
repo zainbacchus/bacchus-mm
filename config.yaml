@@ -49,10 +49,16 @@ fifteen:
   # the next review can score them separately. Sources in ROADMAP Phase D
   # and strategy/join_touch.py.
   # M1 favorite-longshot tilt: never sell the favorite / buy the longshot in
-  # the tails. Calibrated on 1,440 settled 15M windows (2026-08-06): buying
-  # favorites at 0.98-1.00 late-window settles +0.57c/ct ABOVE price
-  # (n=2005, ~4sigma); the longshot mirror is negative. 0 disables.
-  tilt_tail_threshold: 0.90
+  # the tails. 2026-08-08 WALK-DOWN 0.90 -> 0.65 per ROADMAP's gate, both
+  # halves satisfied: (1) attribution on the live decision logs showed the
+  # 0.90-tilt's suppressions were net-positive (declined favorite-sales
+  # would have LOST $8.59 over 286 market-minutes; see
+  # research/ATTRIBUTION-M1-2026-08-08.md); (2) our own fills said the
+  # 0.35-0.65 boundary at >5 sigma: side-taken band 0.10-0.35 ran -7.29c/ct
+  # (n=1,320 ct) while 0.65-0.90 ran +7.83c/ct (n=1,298) - the walk-down
+  # removes exactly the losing band and keeps the winning one. Original
+  # 0.90 calibration: research/CALIBRATION-15M-2026-08-06.md. 0 disables.
+  tilt_tail_threshold: 0.65
   # M3 price-shaped inventory cap, worst-case dollars per market: long caps
   # at max_loss/p, short at max_loss/(1-p) (never above the flat cap).
   # Equals the flat cap 5 at p=0.50. 0 disables.
@@ -90,18 +96,18 @@ fifteen:
       at_et: "10:30"
       pull_before_seconds: 120
       pull_after_seconds: 180
-    # - name: CPI
-    #   series: [KXGOLD15M, KXSILVER15M, KXWTI15M]
-    #   dates: []          # maintained by the daily review PRs
-    #   at_et: "08:30"
-    #   pull_before_seconds: 120
-    #   pull_after_seconds: 300
-    # - name: FOMC statement
-    #   series: [KXGOLD15M, KXSILVER15M, KXBTC15M, KXETH15M, KXWTI15M]
-    #   dates: []          # maintained by the daily review PRs
-    #   at_et: "14:00"
-    #   pull_before_seconds: 120
-    #   pull_after_seconds: 600
+    - name: CPI
+      series: [KXGOLD15M, KXSILVER15M, KXWTI15M, KXBTC15M, KXETH15M]
+      dates: ["2026-08-12", "2026-09-11"] # BLS schedule; July CPI 8/12, Aug CPI 9/11
+      at_et: "08:30"
+      pull_before_seconds: 120
+      pull_after_seconds: 300
+    - name: FOMC statement
+      series: [KXGOLD15M, KXSILVER15M, KXBTC15M, KXETH15M, KXWTI15M]
+      dates: ["2026-09-16"] # federalreserve.gov FOMC calendar
+      at_et: "14:00"
+      pull_before_seconds: 120
+      pull_after_seconds: 600
   requote_tolerance: 0.002 # decicent books: chase the touch only when >= 2 ticks away
   order_ttl_seconds: 60
   settlement_poll_seconds: 300 # windows settle ~30min after close; recycle capital promptly
