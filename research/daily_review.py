@@ -271,6 +271,7 @@ _LEDGER_COLS = [
 
 def render_ledger_md(ordered: list[dict], dest_md: Path, tail: int = 30) -> None:
     out = ["# Daily ledger", "",
+           "![Daily volume and net PnL](LEDGER-CHART.svg)", "",
            "Columns: fills = individual executions; markets = distinct",
            "15-minute windows traded (each window is its own market with its",
            "own ticker); contracts = total quantity across fills (fractional:",
@@ -288,6 +289,145 @@ def render_ledger_md(ordered: list[dict], dest_md: Path, tail: int = 30) -> None
         out.append("| " + " | ".join(fmt(r[key]) for _, key, fmt in _LEDGER_COLS) + " |")
     out.append("")
     dest_md.write_text("\n".join(out))
+
+
+def render_ledger_chart(ordered: list[dict], dest_svg: Path, tail: int = 35) -> None:
+    """Committed SVG time series: daily volume (blue bars) over daily net PnL
+    (diverging blue/red bars around zero). Two stacked panels sharing the
+    date axis - never a dual-axis chart. Palette validated (dataviz method):
+    light #2a78d6/#e34948, dark #3987e5/#e66767 on their surfaces; text in
+    text tokens, not series colors; bars carry native <title> tooltips
+    (survive GitHub's SVG sanitizer); x positions are DATE-scaled so no-trade
+    days appear as honest gaps."""
+    from datetime import date as _date
+
+    rows = ordered[-tail:]
+    if not rows:
+        return
+    days = [_date.fromisoformat(r["date"]) for r in rows]
+    d0, d1 = days[0], days[-1]
+    span = max((d1 - d0).days, 1)
+    W, H = 880, 560
+    L, R = 62, 14
+    ax_top, ax_bot = 66, 268           # volume panel
+    bx_top, bx_bot = 330, 508          # pnl panel
+    iw = W - L - R
+    slot = iw / (span + 1)
+    bw = max(3.0, min(16.0, slot * 0.72))
+
+    def x(d):
+        return L + ((d - d0).days + 0.5) * slot
+
+    vols = [float(r["volume_usd"]) for r in rows]
+    pnls = [float(r["net_pnl_usd"]) for r in rows]
+    vmax = max(max(vols), 1.0) * 1.08
+    pmin, pmax = min(min(pnls), 0.0), max(max(pnls), 0.0)
+    pad = max((pmax - pmin) * 0.10, 0.5)
+    pmin, pmax = pmin - pad, pmax + pad
+
+    def vy(v):
+        return ax_bot - (v / vmax) * (ax_bot - ax_top)
+
+    def py(v):
+        return bx_bot - ((v - pmin) / (pmax - pmin)) * (bx_bot - bx_top)
+
+    zero_y = py(0.0)
+
+    def bar(cx, y_from, y_to, cls, tip):
+        """Rounded at the value end only, anchored at y_from (baseline)."""
+        x0 = cx - bw / 2
+        r = min(4.0, bw / 2)
+        up = y_to < y_from
+        yv = y_to
+        if abs(y_from - y_to) < 1.0:
+            yv = y_from - 1.0 if up else y_from + 1.0
+        if up:
+            d = (f"M{x0:.1f},{y_from:.1f} L{x0:.1f},{yv + r:.1f} Q{x0:.1f},{yv:.1f} "
+                 f"{x0 + r:.1f},{yv:.1f} L{x0 + bw - r:.1f},{yv:.1f} Q{x0 + bw:.1f},{yv:.1f} "
+                 f"{x0 + bw:.1f},{yv + r:.1f} L{x0 + bw:.1f},{y_from:.1f} Z")
+        else:
+            d = (f"M{x0:.1f},{y_from:.1f} L{x0:.1f},{yv - r:.1f} Q{x0:.1f},{yv:.1f} "
+                 f"{x0 + r:.1f},{yv:.1f} L{x0 + bw - r:.1f},{yv:.1f} Q{x0 + bw:.1f},{yv:.1f} "
+                 f"{x0 + bw:.1f},{yv - r:.1f} L{x0 + bw:.1f},{y_from:.1f} Z")
+        return f'<path d="{d}" class="{cls}"><title>{tip}</title></path>'
+
+    def fmt(v):
+        return f"{v:,.0f}" if abs(v) >= 100 else f"{v:,.2f}"
+
+    e = []
+    e.append(f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" '
+             f'font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif">')
+    e.append("""<style>
+  .bg{fill:#fcfcfb}.t1{fill:#0b0b0b}.t2{fill:#52514e}.grid{stroke:#e8e7e4;stroke-width:1}
+  .zero{stroke:#a6a49d;stroke-width:1}
+  .vol{fill:#2a78d6}.pos{fill:#2a78d6}.neg{fill:#e34948}
+  text{font-size:12px}.title{font-size:15px;font-weight:600}.sub{font-size:12px}
+  .lbl{font-size:11px}
+  @media (prefers-color-scheme: dark){
+    .bg{fill:#1a1a19}.t1{fill:#ffffff}.t2{fill:#c3c2b7}.grid{stroke:#2c2c2a}
+    .zero{stroke:#6b6a64}.vol{fill:#3987e5}.pos{fill:#3987e5}.neg{fill:#e66767}
+  }
+</style>""")
+    e.append(f'<rect class="bg" x="0" y="0" width="{W}" height="{H}"/>')
+    e.append(f'<text class="t1 title" x="{L}" y="26">bacchus-mm daily ledger</text>')
+    e.append(f'<text class="t2 sub" x="{L}" y="44">Daily volume traded ($) and daily net '
+             f'PnL ($, settled, fees included) - {d0.isoformat()} to {d1.isoformat()}</text>')
+
+    # ---- volume panel
+    e.append(f'<text class="t2" x="{L}" y="{ax_top - 8}">Volume $</text>')
+    step = 10 ** max(0, len(str(int(vmax))) - 1)
+    if vmax / step < 2.5:
+        step /= 2
+    v = step
+    while v < vmax:
+        yy = vy(v)
+        e.append(f'<line class="grid" x1="{L}" x2="{W - R}" y1="{yy:.1f}" y2="{yy:.1f}"/>')
+        e.append(f'<text class="t2 lbl" x="{L - 6}" y="{yy + 4:.1f}" text-anchor="end">{fmt(v)}</text>')
+        v += step
+    e.append(f'<line class="zero" x1="{L}" x2="{W - R}" y1="{ax_bot}" y2="{ax_bot}"/>')
+    imax = vols.index(max(vols))
+    for i, r in enumerate(rows):
+        cx = x(days[i])
+        e.append(bar(cx, ax_bot, vy(vols[i]), "vol",
+                     f"{r['date']}: ${fmt(vols[i])} volume, {r['fills']} fills, {r['markets']} markets"))
+        if i == imax or i == len(rows) - 1:
+            e.append(f'<text class="t2 lbl" x="{cx:.1f}" y="{vy(vols[i]) - 5:.1f}" '
+                     f'text-anchor="middle">{fmt(vols[i])}</text>')
+
+    # ---- pnl panel
+    e.append(f'<text class="t2" x="{L}" y="{bx_top - 8}">Net PnL $</text>')
+    for gv in sorted({round(pmin), 0, round(pmax)} | {round((pmin + pmax) / 2)}):
+        if pmin <= gv <= pmax and gv != 0:
+            yy = py(gv)
+            e.append(f'<line class="grid" x1="{L}" x2="{W - R}" y1="{yy:.1f}" y2="{yy:.1f}"/>')
+            e.append(f'<text class="t2 lbl" x="{L - 6}" y="{yy + 4:.1f}" text-anchor="end">{gv:+d}</text>')
+    e.append(f'<line class="zero" x1="{L}" x2="{W - R}" y1="{zero_y:.1f}" y2="{zero_y:.1f}"/>')
+    e.append(f'<text class="t2 lbl" x="{L - 6}" y="{zero_y + 4:.1f}" text-anchor="end">0</text>')
+    ibest = pnls.index(max(pnls))
+    iworst = pnls.index(min(pnls))
+    for i, r in enumerate(rows):
+        cx = x(days[i])
+        cls = "pos" if pnls[i] >= 0 else "neg"
+        e.append(bar(cx, zero_y, py(pnls[i]), cls,
+                     f"{r['date']}: {pnls[i]:+,.2f} net PnL (cum {float(r['cum_net_pnl_usd']):+,.2f})"))
+        if i in (ibest, iworst, len(rows) - 1):
+            above = pnls[i] >= 0
+            yy = py(pnls[i]) + (-5 if above else 13)
+            e.append(f'<text class="t2 lbl" x="{cx:.1f}" y="{yy:.1f}" '
+                     f'text-anchor="middle">{pnls[i]:+,.2f}</text>')
+
+    # ---- shared x ticks (weekly)
+    tick = d0
+    from datetime import timedelta as _td
+    while tick <= d1:
+        cx = x(tick)
+        e.append(f'<text class="t2 lbl" x="{cx:.1f}" y="{bx_bot + 20}" '
+                 f'text-anchor="middle">{tick.strftime("%b %d")}</text>')
+        tick += _td(days=7)
+    e.append(f'<text class="t2 lbl" x="{W - R}" y="{H - 12}" text-anchor="end">'
+             f'settled-only PnL attributed to fill day; source: LEDGER.csv</text>')
+    e.append("</svg>")
+    dest_svg.write_text("\n".join(e))
 
 
 def main() -> None:
@@ -406,6 +546,8 @@ def main() -> None:
     )
     render_ledger_md(ledger_rows,
                      Path(__file__).resolve().parent / "daily" / "LEDGER.md")
+    render_ledger_chart(ledger_rows,
+                        Path(__file__).resolve().parent / "daily" / "LEDGER-CHART.svg")
 
     # ---- 15M series discovery (public; 2026-08-07): Kalshi expands this
     # family fast (ZEC/BCH/TON/XRP/ADA and two crypto indexes appeared within

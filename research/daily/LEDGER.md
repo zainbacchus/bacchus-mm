@@ -1,5 +1,7 @@
 # Daily ledger
 
+![Daily volume and net PnL](LEDGER-CHART.svg)
+
 Columns: fills = individual executions; markets = distinct
 15-minute windows traded (each window is its own market with its
 own ticker); contracts = total quantity across fills (fractional:
