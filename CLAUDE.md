@@ -279,8 +279,11 @@ exits on it).
   opens a "Daily review <date>" PR with interpretation + at most three
   evidence-quoted proposals (explicit HOLDs when evidence is unclear).
   Config diffs ride as separate PROPOSAL commits; merging never deploys —
-  the owner redeploys in the fly UI. Update the prompt via the RemoteTrigger
-  tool (or claude.ai/code/routines). Its env (Kalshi keys, network allowlist
+  the owner redeploys in the fly UI. The operative prompt lives in
+  research/ROUTINE-PROMPT.md (since 2026-08-09 the trigger message is a
+  short pointer to that file, because the trigger API caps message size):
+  prompt changes are ordinary commits; RemoteTrigger is only for schedule,
+  environment, or pointer changes. Its env (Kalshi keys, network allowlist
   for api.elections.kalshi.com, GitHub write) is configured at claude.ai by
   the owner, never through chat. Deep attribution (quote_decision, lever
   telemetry, guard stats — fly-DB data) stays in interactive sessions.
