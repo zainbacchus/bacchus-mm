@@ -27,6 +27,23 @@ kept, or retired based on what the diary says. The first strategy (calm,
 slow markets) was measured, found unprofitable, and retired with a
 retrospective; the current one is its data-driven replacement.
 
+**What kind of bot this is (and isn't):** not a grid bot. A grid bot lays
+out a ladder of fixed price levels in advance and waits for price to
+oscillate through them; the ladder ignores the live market, and the classic
+failure mode is inventory piling up in a trend. This bot has no ladder: it
+quotes exactly two prices, the current best bid and best ask, and those
+quotes follow the book wherever it goes. It is a market maker, but a
+deliberately humble kind - passive and queue-based. It never prices (no
+fair-value model; the market's mid measurably beat ours), never leads or
+tightens the spread, never crosses; it joins the price the market already
+agreed on and sells its place in line, and its real edge is the refusal
+machinery above. Where a full market maker works inventory back to flat,
+this bot lets the 15-minute expiry do the unwinding: every window settles,
+so inventory is flushed flat, with defined risk, every quarter hour. In
+booth language: a grid bot sets out price tags in advance and hopes the
+crowd walks through them; this booth stands wherever the crowd is currently
+haggling, and profits by being picky about customers.
+
 ## The goal, stated plainly
 
 Test whether a small passive market-making bot on Kalshi's 15-minute
