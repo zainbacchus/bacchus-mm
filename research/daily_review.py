@@ -292,13 +292,14 @@ def render_ledger_md(ordered: list[dict], dest_md: Path, tail: int = 30) -> None
 
 
 def render_ledger_chart(ordered: list[dict], dest_svg: Path, tail: int = 35) -> None:
-    """Committed SVG time series: daily volume (blue bars) over daily net PnL
-    (diverging blue/red bars around zero). Two stacked panels sharing the
-    date axis - never a dual-axis chart. Palette validated (dataviz method):
-    light #2a78d6/#e34948, dark #3987e5/#e66767 on their surfaces; text in
-    text tokens, not series colors; bars carry native <title> tooltips
-    (survive GitHub's SVG sanitizer); x positions are DATE-scaled so no-trade
-    days appear as honest gaps."""
+    """Committed SVG time series: daily volume (blue bars), daily fills
+    (orange bars, owner request 2026-08-09), and daily net PnL (diverging
+    blue/red bars around zero). Three stacked panels sharing the date axis -
+    never a dual-axis chart. Palette validated (dataviz method): light
+    #2a78d6/#eb6834/#e34948, dark #3987e5/#d95926/#e66767 on their surfaces;
+    text in text tokens, not series colors; bars carry native <title>
+    tooltips (survive GitHub's SVG sanitizer); x positions are DATE-scaled
+    so no-trade days appear as honest gaps."""
     from datetime import date as _date
 
     rows = ordered[-tail:]
@@ -307,10 +308,11 @@ def render_ledger_chart(ordered: list[dict], dest_svg: Path, tail: int = 35) -> 
     days = [_date.fromisoformat(r["date"]) for r in rows]
     d0, d1 = days[0], days[-1]
     span = max((d1 - d0).days, 1)
-    W, H = 880, 560
+    W, H = 880, 780
     L, R = 62, 14
-    ax_top, ax_bot = 66, 268           # volume panel
-    bx_top, bx_bot = 330, 508          # pnl panel
+    ax_top, ax_bot = 66, 240           # volume panel
+    fx_top, fx_bot = 302, 446          # fills panel
+    bx_top, bx_bot = 508, 682          # pnl panel
     iw = W - L - R
     slot = iw / (span + 1)
     bw = max(3.0, min(16.0, slot * 0.72))
@@ -319,14 +321,19 @@ def render_ledger_chart(ordered: list[dict], dest_svg: Path, tail: int = 35) -> 
         return L + ((d - d0).days + 0.5) * slot
 
     vols = [float(r["volume_usd"]) for r in rows]
+    fils = [int(r["fills"]) for r in rows]
     pnls = [float(r["net_pnl_usd"]) for r in rows]
     vmax = max(max(vols), 1.0) * 1.08
+    fmax = max(max(fils), 1) * 1.08
     pmin, pmax = min(min(pnls), 0.0), max(max(pnls), 0.0)
     pad = max((pmax - pmin) * 0.10, 0.5)
     pmin, pmax = pmin - pad, pmax + pad
 
     def vy(v):
         return ax_bot - (v / vmax) * (ax_bot - ax_top)
+
+    def fy(v):
+        return fx_bot - (v / fmax) * (fx_bot - fx_top)
 
     def py(v):
         return bx_bot - ((v - pmin) / (pmax - pmin)) * (bx_bot - bx_top)
@@ -360,18 +367,18 @@ def render_ledger_chart(ordered: list[dict], dest_svg: Path, tail: int = 35) -> 
     e.append("""<style>
   .bg{fill:#fcfcfb}.t1{fill:#0b0b0b}.t2{fill:#52514e}.grid{stroke:#e8e7e4;stroke-width:1}
   .zero{stroke:#a6a49d;stroke-width:1}
-  .vol{fill:#2a78d6}.pos{fill:#2a78d6}.neg{fill:#e34948}
+  .vol{fill:#2a78d6}.fil{fill:#eb6834}.pos{fill:#2a78d6}.neg{fill:#e34948}
   text{font-size:12px}.title{font-size:15px;font-weight:600}.sub{font-size:12px}
   .lbl{font-size:11px}
   @media (prefers-color-scheme: dark){
     .bg{fill:#1a1a19}.t1{fill:#ffffff}.t2{fill:#c3c2b7}.grid{stroke:#2c2c2a}
-    .zero{stroke:#6b6a64}.vol{fill:#3987e5}.pos{fill:#3987e5}.neg{fill:#e66767}
+    .zero{stroke:#6b6a64}.vol{fill:#3987e5}.fil{fill:#d95926}.pos{fill:#3987e5}.neg{fill:#e66767}
   }
 </style>""")
     e.append(f'<rect class="bg" x="0" y="0" width="{W}" height="{H}"/>')
     e.append(f'<text class="t1 title" x="{L}" y="26">bacchus-mm daily ledger</text>')
-    e.append(f'<text class="t2 sub" x="{L}" y="44">Daily volume traded ($) and daily net '
-             f'PnL ($, settled, fees included) - {d0.isoformat()} to {d1.isoformat()}</text>')
+    e.append(f'<text class="t2 sub" x="{L}" y="44">Daily volume traded ($), fills (#), and '
+             f'daily net PnL ($, settled, fees included) - {d0.isoformat()} to {d1.isoformat()}</text>')
 
     # ---- volume panel
     e.append(f'<text class="t2" x="{L}" y="{ax_top - 8}">Volume $</text>')
@@ -393,6 +400,28 @@ def render_ledger_chart(ordered: list[dict], dest_svg: Path, tail: int = 35) -> 
         if i == imax or i == len(rows) - 1:
             e.append(f'<text class="t2 lbl" x="{cx:.1f}" y="{vy(vols[i]) - 5:.1f}" '
                      f'text-anchor="middle">{fmt(vols[i])}</text>')
+
+    # ---- fills panel
+    e.append(f'<text class="t2" x="{L}" y="{fx_top - 8}">Fills #</text>')
+    fstep = 10 ** max(0, len(str(int(fmax))) - 1)
+    if fmax / fstep < 2.5:
+        fstep /= 2
+    v = fstep
+    while v < fmax:
+        yy = fy(v)
+        e.append(f'<line class="grid" x1="{L}" x2="{W - R}" y1="{yy:.1f}" y2="{yy:.1f}"/>')
+        e.append(f'<text class="t2 lbl" x="{L - 6}" y="{yy + 4:.1f}" text-anchor="end">{fmt(v)}</text>')
+        v += fstep
+    e.append(f'<line class="zero" x1="{L}" x2="{W - R}" y1="{fx_bot}" y2="{fx_bot}"/>')
+    ifmax = fils.index(max(fils))
+    for i, r in enumerate(rows):
+        cx = x(days[i])
+        e.append(bar(cx, fx_bot, fy(fils[i]), "fil",
+                     f"{r['date']}: {fils[i]:,} fills, {r['contracts']} contracts, "
+                     f"{r['markets']} markets"))
+        if i == ifmax or i == len(rows) - 1:
+            e.append(f'<text class="t2 lbl" x="{cx:.1f}" y="{fy(fils[i]) - 5:.1f}" '
+                     f'text-anchor="middle">{fils[i]:,}</text>')
 
     # ---- pnl panel
     e.append(f'<text class="t2" x="{L}" y="{bx_top - 8}">Net PnL $</text>')
