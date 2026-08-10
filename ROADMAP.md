@@ -62,8 +62,10 @@ reviews + interactive attribution sessions):
 5. WEEKEND REGIME: underlying commodity markets close weekends — verify
    what KXGOLD/SILVER/WTI 15M windows do on Saturday and that the flow gate
    stands down as designed. First weekend under measurement: 2026-08-08/09.
-6. SERIES RE-ENTRY PROBE (queued 2026-08-08, run AFTER the tilt walk-down
-   has 1-2 clean settled days): the alt-crypto cull was measured almost
+6. SERIES RE-ENTRY PROBE (queued 2026-08-08; EXECUTED 2026-08-10 with
+   KXXRP15M + KXZEC15M after walk-down day 2 met the gate - loss band
+   eliminated two days running, gain side unconfirmed; verdict due after
+   3-4 settled days): the alt-crypto cull was measured almost
    entirely PRE-LEVERS, so "toxic" is not settled law. But neglect only
    pays when the underlying is tame (commodities > BTC per contract, while
    neglected-and-wild alts bled), so probes must meet criteria, not

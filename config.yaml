@@ -37,6 +37,16 @@ fifteen:
     - KXGOLD15M
     - KXSILVER15M
     - KXWTI15M
+    # 2026-08-10 SERIES RE-ENTRY PROBE (ROADMAP item 6, owner-approved).
+    # Walk-down verdict after 2 days: loss band eliminated (1320 -> 13 -> 0
+    # ct), gain side unconfirmed; probe adds cheap information without
+    # touching the incumbents' reads. Candidates met the criteria: never
+    # measured by us, Coinbase spot feed so M4 covers them (mappings in
+    # spot_products below), enter behind all six levers at 1-lot. Worst
+    # case ~$2.50/market under M3. Decision rule: 3-4 settled days, keep
+    # or drop on the numbers via the daily review.
+    - KXXRP15M
+    - KXZEC15M
   quote_size: 1 # measurement size; scaling is a NEW experiment (own size moves the queue)
   max_contracts_per_market: 5
   pull_seconds_before_close: 75 # last 60s is the settlement averaging window
@@ -83,6 +93,18 @@ fifteen:
   spot_jump_window_seconds: 10
   spot_jump_cooloff_seconds: 20
   spot_poll_seconds: 2
+  # 2026-08-10: providing this key REPLACES the built-in default mapping
+  # (fifteen.py DEFAULT_SPOT_PRODUCTS), so it restates the defaults and adds
+  # the probe series. Only entries whose series is in fifteen.series above
+  # actually subscribe; the rest are inert.
+  spot_products:
+    KXBTC15M: BTC-USD
+    KXETH15M: ETH-USD
+    KXSOL15M: SOL-USD
+    KXDOGE15M: DOGE-USD
+    KXNEAR15M: NEAR-USD
+    KXXRP15M: XRP-USD
+    KXZEC15M: ZEC-USD
   # M6 scheduled-release pull (2026-08-07): the commodities' jump moments
   # are on a CALENDAR (they have no tick feed for M4). Times are US Eastern;
   # DST is handled. `weekly` entries fire every week; `dates` entries on the
