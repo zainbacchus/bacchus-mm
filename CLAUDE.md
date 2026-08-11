@@ -259,6 +259,15 @@ exits on it).
     -24c/ct (informed-only flow). Doubles as the overnight auto-curfew.
     Telemetry: quotes_pulled/quotes_resumed reason=flow_gate.
 
+- **Window-open delay (2026-08-11, post-kill-switch restart)**:
+  `min_seconds_after_open` 5 -> 90. The 08-11 halt traced to a window-open
+  toxic-flow regime (informed sellers hitting fresh thin-queue bids near
+  0.50; onset pre-dated the probe deploy, which only amplified it). Full
+  forensics + judgment plan: research/ATTRIBUTION-WINDOW-OPEN-2026-08-11.md.
+  Reviews should read minute-14 as structurally EXCLUDED from here on; if
+  losses appear at minute 13, that is the flagged migration case (next
+  variable: join_depth posting filter).
+
 ## Measurement rules (2026-08-07 — violations produced a fake +0.56c read)
 
 - Measure settled-fills-vs-settlement from a FIXED t0, unsegmented, via

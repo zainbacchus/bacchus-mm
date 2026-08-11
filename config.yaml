@@ -50,6 +50,18 @@ fifteen:
   quote_size: 1 # measurement size; scaling is a NEW experiment (own size moves the queue)
   max_contracts_per_market: 5
   pull_seconds_before_close: 75 # last 60s is the settlement averaging window
+  # 2026-08-11 WINDOW-OPEN DELAY (the single change for the post-kill-switch
+  # restart; evidence: research/ATTRIBUTION-WINDOW-OPEN-2026-08-11.md). The
+  # first-minute (minute-14) bucket lost ~$23 over the final 18h to the halt
+  # while minutes 13-1 made +$14.51; forensics attribute it to short-horizon
+  # informed sellers hitting fresh bids near 0.50 in thin queues (onset
+  # BEFORE the probe deploy, amplified by 7-way simultaneous opens). 90s
+  # keeps workers out of the whole toxic bucket (worker spawns at the first
+  # 10s discovery poll after open+90). Judge after ~24h of settled data: if
+  # total PnL reverts to the minutes-13-1 baseline, confirmed; if losses
+  # migrate to minute 13, next single variable is a join_depth posting
+  # filter, not a longer delay. Was 5 (book-forming guard) since 08-06.
+  min_seconds_after_open: 90
   # 2026-08-06 ops: halve requote churn after event-loop starvation on the
   # first live hour (REST creates timing out + health probe misses). 2s is
   # still 30x fresher than the study's minute-refresh baseline.

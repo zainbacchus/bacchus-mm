@@ -40,6 +40,16 @@ M5 flow gate — see CLAUDE.md). Kill switch $30. A daily cloud routine
 reviews settled results and PRs proposals (CLAUDE.md "Daily review
 routine"). First clean read since the focus config: roughly flat.
 
+STATUS 2026-08-11: the $30 kill switch tripped at 08:53:56Z after the worst
+day in the ledger (-$22.65/26h). Forensics attributed the loss to a
+window-open toxic-flow regime, NOT a code defect and NOT the probes (see
+research/ATTRIBUTION-WINDOW-OPEN-2026-08-11.md - the decisive doc for this
+period). Restart change, one variable: min_seconds_after_open 5 -> 90
+(workers skip the toxic first minute). Judge after ~24h settled; if losses
+migrate to minute 13, next variable is a join_depth posting filter. Queued
+behind that window: per-series spot_jump_bps (ZEC ~2x), raw spot prints in
+fifteen_spot_pull payloads, routine halt detection.
+
 Next-lever evidence queue (work these IN ORDER of evidence, via the daily
 reviews + interactive attribution sessions):
 1. SCHEDULED-RELEASE PULL (M6 candidate): the commodities have no tick feed
