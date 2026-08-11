@@ -48,7 +48,8 @@ period). Restart change, one variable: min_seconds_after_open 5 -> 90
 (workers skip the toxic first minute). Judge after ~24h settled; if losses
 migrate to minute 13, next variable is a join_depth posting filter. Queued
 behind that window: per-series spot_jump_bps (ZEC ~2x), raw spot prints in
-fifteen_spot_pull payloads, routine halt detection.
+fifteen_spot_pull payloads. (Routine halt detection SHIPPED
+2026-08-11: the 6h pulse routine, research/ROUTINE-PULSE.md.)
 
 Next-lever evidence queue (work these IN ORDER of evidence, via the daily
 reviews + interactive attribution sessions):

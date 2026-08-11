@@ -459,12 +459,79 @@ def render_ledger_chart(ordered: list[dict], dest_svg: Path, tail: int = 35) -> 
     dest_svg.write_text("\n".join(e))
 
 
+PULSE_FILL_STALE_MIN = 120.0  # minutes without any account fill -> alarm
+PULSE_EQUITY_DROP = 15.0      # dollars below the last review baseline -> alarm
+
+
+def _latest_review_equity() -> tuple[str, float] | None:
+    """Baseline equity from the newest committed REVIEW-DATA file."""
+    files = sorted((Path(__file__).parent / "daily").glob("REVIEW-DATA-*.md"))
+    if not files:
+        return None
+    m = re.search(r"account balance: \$([0-9.]+) \(\+ \$([0-9.]+) in positions\)",
+                  files[-1].read_text())
+    if not m:
+        return None
+    return files[-1].name, float(m.group(1)) + float(m.group(2))
+
+
+def pulse() -> None:
+    """Ops heartbeat: two GETs, writes NOTHING. Prints PULSE OK or PULSE
+    ALARM with reasons. Created 2026-08-11 after the kill-switch halt went
+    unnoticed for 3.5h (research/ATTRIBUTION-WINDOW-OPEN-2026-08-11.md).
+    Alarms: no account fill for >2h (the book normally fills ~1-2/min, and
+    a halted/wedged bot fills zero); equity >$15 below the last committed
+    daily-review baseline (half the kill switch); any taker fill. The
+    /portfolio/fills endpoint returns newest-first, so one page suffices
+    for staleness."""
+    now = time.time()
+    d = get("/portfolio/fills", f"?limit=200&min_ts={int(now - 4 * 3600)}")
+    recent = d.get("fills") or []
+    bal = get("/portfolio/balance")
+    equity = (f(bal.get("balance_dollars")) or 0.0) + (f(bal.get("portfolio_value")) or 0.0) / 100
+    alarms = []
+    stamps = [datetime.fromisoformat(x["created_time"].replace("Z", "+00:00")).timestamp()
+              for x in recent if x.get("created_time")]
+    if stamps:
+        age_min = (now - max(stamps)) / 60
+        fill_line = f"last fill {age_min:.0f} min ago ({len(recent)} in the last 4h page)"
+        if age_min > PULSE_FILL_STALE_MIN:
+            alarms.append(f"fills stale ({age_min:.0f} min): halted or wedged? "
+                          "check fly status + data/HALTED")
+    else:
+        fill_line = "NO fills in the last 4h"
+        alarms.append("fills stale (none in 4h): halted or wedged? "
+                      "check fly status + data/HALTED")
+    takers = sum(1 for x in recent if x.get("is_taker"))
+    if takers:
+        alarms.append(f"{takers} taker fill(s) in the last 4h page (post-only invariant)")
+    base = _latest_review_equity()
+    if base:
+        name, base_eq = base
+        drop = base_eq - equity
+        eq_line = f"equity ${equity:.2f} vs {name} baseline ${base_eq:.2f} ({-drop:+.2f})"
+        if drop > PULSE_EQUITY_DROP:
+            alarms.append(f"equity down ${drop:.2f} since the last review "
+                          f"(threshold ${PULSE_EQUITY_DROP:.0f}; kill switch is $30)")
+    else:
+        eq_line = f"equity ${equity:.2f} (no review baseline found)"
+    print(f"- {fill_line}")
+    print(f"- {eq_line}")
+    print("PULSE ALARM: " + "; ".join(alarms) if alarms else "PULSE OK")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--hours", type=float, default=26.0)
     ap.add_argument("--ledger-days", type=int, default=45,
                     help="rebuild window for the daily ledger (older rows preserved)")
+    ap.add_argument("--pulse", action="store_true",
+                    help="ops heartbeat: two GETs, no files written, prints PULSE OK/ALARM")
     args = ap.parse_args()
+
+    if args.pulse:
+        pulse()
+        return
 
     now = time.time()
     t0 = int(now - args.hours * 3600)
@@ -608,6 +675,16 @@ def main() -> None:
     out.append(f"# Daily review data: {utc_date} (last {args.hours:.0f}h, unsegmented)")
     out.append("")
     out.append(f"- generated: {datetime.now(timezone.utc).isoformat()}")
+    newest_fill = max((datetime.fromisoformat(x["created_time"].replace("Z", "+00:00"))
+                       .timestamp() for x in all_fills if x.get("created_time")),
+                      default=None)
+    if newest_fill is None:
+        out.append("- last account fill: NONE in the ledger window (halted?)")
+    else:
+        age = (now - newest_fill) / 60
+        out.append(f"- last account fill: {age:.0f} min before this pull"
+                   + (" (STALE >2h - is the bot halted? check fly + data/HALTED)"
+                      if age > PULSE_FILL_STALE_MIN else ""))
     out.append(f"- account balance: ${balance:.2f} (+ ${portfolio_cents/100:.2f} in positions)")
     out.append(f"- fifteen fills in window: {len(fills)}; settled contracts: {tot_ct:.1f}")
     out.append(f"- taker fills: {taker_fills} (MUST be 0; post-only); "

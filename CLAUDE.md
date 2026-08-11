@@ -296,6 +296,12 @@ exits on it).
   for api.elections.kalshi.com, GitHub write) is configured at claude.ai by
   the owner, never through chat. Deep attribution (quote_decision, lever
   telemetry, guard stats — fly-DB data) stays in interactive sessions.
+- PULSE routine (2026-08-11, after the halt went unnoticed 3.5h): a second
+  trigger every 6h runs `daily_review.py --pulse` (two GETs, writes
+  nothing) and stays silent on PULSE OK; on PULSE ALARM (fills stale >2h /
+  equity -$15 vs last review / taker fill) it opens a GitHub issue.
+  Operative prompt: research/ROUTINE-PULSE.md (pointer architecture, same
+  as the daily). Detection only — it never proposes config.
 
 ## Stall diagnostics (2026-08-07 incident tooling — leave them in)
 

@@ -102,9 +102,10 @@ Judgment plan (~24h of settled data after restart):
 2. Log raw spot prints in fifteen_spot_pull payloads (currently only
    {series, move_bps, cooloff}); direction/price would make the next
    forensic pass able to see what informed flow reacts to.
-3. Daily routine halt detection: the 08-11 review did not notice the bot
-   had been halted for 3.5h (REST-only view). Add a last-fill staleness
-   check to research/daily_review.py output.
+3. Daily routine halt detection: SHIPPED same day - `--pulse` mode in
+   research/daily_review.py plus a 6h pulse trigger (see
+   research/ROUTINE-PULSE.md), and the daily header now carries a
+   last-account-fill staleness line.
 4. Data quirk parked: ~8-12% of daily fill rows carry signed_count=0
    (fee-reported artifact rows, pre-existing since Aug 6, zero position
    impact) - worth a code look in the fill path someday.
