@@ -588,6 +588,7 @@ def main() -> None:
     per_window = collections.defaultdict(lambda: dict(ct=0.0, pnl=0.0, fills=0))
     by_min = collections.defaultdict(lambda: dict(ct=0.0, pnl=0.0))
     by_band = collections.defaultdict(lambda: dict(ct=0.0, pnl=0.0))
+    by_side = collections.defaultdict(lambda: dict(ct=0.0, pnl=0.0))
     taker_fills = 0
     total_fees = 0.0
     unsettled = set()
@@ -627,6 +628,11 @@ def main() -> None:
             m = max(0, min(15, int((cts - fts) / 60)))
             by_min[m]["ct"] += abs(ct)
             by_min[m]["pnl"] += pnl
+        # side split (2026-08-11): the drift-selection signature is one side
+        # clearly negative while the other is positive (see the pick-off
+        # report note in CLAUDE.md) - invisible in every other cut.
+        by_side["buys" if x.get("action") == "buy" else "sells"]["ct"] += abs(ct)
+        by_side["buys" if x.get("action") == "buy" else "sells"]["pnl"] += pnl
         # price band of the BUY side we took (yes at yp if buy, no at 1-yp if sell)
         p_paid = yp if x.get("action") == "buy" else (1.0 - yp)
         for lo, hi in bands:
@@ -721,6 +727,15 @@ def main() -> None:
     out.append("|---|---|---|---|")
     for (lo, hi), a in sorted(by_band.items()):
         out.append(f"| {lo:.2f}-{hi:.2f} | {a['ct']:.1f} | {a['pnl']:+.2f} | "
+                   f"{a['pnl']/max(a['ct'],1)*100:+.2f} |")
+    out.append("")
+    out.append("## By side (divergence = one-directional informed flow)")
+    out.append("")
+    out.append("| side | contracts | pnl $ | c/ct |")
+    out.append("|---|---|---|---|")
+    for side in ("buys", "sells"):
+        a = by_side.get(side, dict(ct=0.0, pnl=0.0))
+        out.append(f"| {side} | {a['ct']:.1f} | {a['pnl']:+.2f} | "
                    f"{a['pnl']/max(a['ct'],1)*100:+.2f} |")
     out.append("")
     out.append("## 15M series discovery")

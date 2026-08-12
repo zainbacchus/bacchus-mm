@@ -57,6 +57,21 @@ INTERPRET (like a trading-desk review):
 7. Tilt evidence: the by-price-band table vs config.yaml
    fifteen.tilt_tail_threshold, using only fills from the currently-active
    series/config where possible.
+7b. Open-delay invariants (2026-08-11, min_seconds_after_open 90): the
+   by-minutes table must show NO minute-14 bucket - workers spawn at
+   open+90s. If minute-14 reappears, flag it LOUDLY as a config
+   regression. Minute-13 is the migration sentinel: if it turns clearly
+   negative while later minutes stay flat, that is the "informed flow
+   followed the first touch" case from
+   research/ATTRIBUTION-WINDOW-OPEN-2026-08-11.md - propose the
+   join_depth posting filter as the next single variable, never a longer
+   delay.
+7c. The by-side table: buys and sells diverging hard (one side clearly
+   negative while the other is clearly positive) is the drift-selection
+   signature - patient one-directional flow that jump defenses cannot
+   see. Report it and HOLD config; the counter-lever (drift detector) is
+   queued in ROADMAP and belongs to an interactive session, not a routine
+   proposal.
 8. The '15M series discovery' section: any NEW SERIES lines become watch
    items in your review (what it is, whether its regime resembles anything
    measured). NEVER propose adding a series in the same review that
@@ -68,8 +83,11 @@ INTERPRET (like a trading-desk review):
    propose dates the owner has previously stated in reviews or commits.
 10. Anomalies, each a loud bullet: taker fills > 0, total fees materially
     nonzero, any single window with |c/ct| > 20 on more than 10 contracts,
-    or account equity moving much more than settled PnL explains (if the
-    numbers look inconsistent, SAY SO - never smooth over).
+    a minute-14 bucket present in the by-minutes table (structurally
+    impossible under the open delay - see 7b), a stale last-account-fill
+    header line (bot likely halted), or account equity moving much more
+    than settled PnL explains (if the numbers look inconsistent, SAY SO -
+    never smooth over).
 
 WRITE + PR:
 
