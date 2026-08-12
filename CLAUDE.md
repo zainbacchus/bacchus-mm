@@ -17,6 +17,12 @@ compatible.
   horizons means the market selection or spread floor is wrong for that market.
 - `quote_decision` events carry mid, book top, inventory, sigma, reservation
   price, and both quotes — enough to replay the strategy's reasoning exactly.
+- Pick-off analysis (2026-08-11): `zsh scripts/pull-fly-db.sh` snapshots the
+  live DB, then `python research/pickoff_report.py <snapshot> --hours 24`
+  buckets settled PnL AND post-fill markouts (+30s/+180s, negative =
+  picked off) by series, minute-of-window, side, price band, and queue
+  depth at join. Markout is the who-filled-us lens; settled is the money;
+  the two diverging by side means two different counterparty populations.
 
 ## Tuning levers (config.local.yaml, overlays config.yaml)
 
