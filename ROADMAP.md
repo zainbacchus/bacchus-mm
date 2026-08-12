@@ -46,9 +46,17 @@ window-open toxic-flow regime, NOT a code defect and NOT the probes (see
 research/ATTRIBUTION-WINDOW-OPEN-2026-08-11.md - the decisive doc for this
 period). Restart change, one variable: min_seconds_after_open 5 -> 90
 (workers skip the toxic first minute). Judge after ~24h settled; if losses
-migrate to minute 13, next variable is a join_depth posting filter. Queued
-behind that window: per-series spot_jump_bps (ZEC ~2x), raw spot prints in
-fifteen_spot_pull payloads. (Routine halt detection SHIPPED
+migrate to minute 13, next variable is a join_depth posting filter. FIRST
+NIGHT'S READ: delay holding (minute-13 positive, no migration), but ZEC
+bled -5.65c/ct into a +3% evening grind and was REMOVED same night (probe
+verdict, evidence-early): M4's 20s jump-cooloff re-arms straight into a
+sustained trend, so a thin trending coin is structurally undefended. XRP
+(the other probe) stays on its 3-4 day clock, ~flat so far. Queued behind
+the delay window: DRIFT DETECTOR (the ZEC lesson: cooloff pulls defend
+jumps, not grinds - e.g. pull while cumulative N-minute spot drift exceeds
+a bar, resuming only when the drift stalls; supersedes the earlier
+raise-ZEC-threshold idea, which points the wrong way for trends), raw spot
+prints in fifteen_spot_pull payloads. (Routine halt detection SHIPPED
 2026-08-11: the 6h pulse routine, research/ROUTINE-PULSE.md.)
 
 Next-lever evidence queue (work these IN ORDER of evidence, via the daily

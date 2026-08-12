@@ -38,15 +38,15 @@ fifteen:
     - KXSILVER15M
     - KXWTI15M
     # 2026-08-10 SERIES RE-ENTRY PROBE (ROADMAP item 6, owner-approved).
-    # Walk-down verdict after 2 days: loss band eliminated (1320 -> 13 -> 0
-    # ct), gain side unconfirmed; probe adds cheap information without
-    # touching the incumbents' reads. Candidates met the criteria: never
-    # measured by us, Coinbase spot feed so M4 covers them (mappings in
-    # spot_products below), enter behind all six levers at 1-lot. Worst
-    # case ~$2.50/market under M3. Decision rule: 3-4 settled days, keep
-    # or drop on the numbers via the daily review.
+    # Candidates met the criteria (never measured, Coinbase feed for M4,
+    # all levers, 1-lot). VERDICTS: KXZEC15M REMOVED 2026-08-11 (owner call,
+    # evidence-early): ZEC-USD ground +3% through the evening and the bot
+    # sold into it all night (-5.65c/ct on 64 ct); M4 fired 100+ pulls but
+    # a 20s jump-cooloff re-arms straight into a grind - structural bleed
+    # for a thin trending coin until a drift detector exists (ROADMAP).
+    # KXXRP15M continues on the standard 3-4 settled-day clock (+0.1-0.5
+    # c/ct so far).
     - KXXRP15M
-    - KXZEC15M
   quote_size: 1 # measurement size; scaling is a NEW experiment (own size moves the queue)
   max_contracts_per_market: 5
   pull_seconds_before_close: 75 # last 60s is the settlement averaging window
