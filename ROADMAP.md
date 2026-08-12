@@ -96,6 +96,20 @@ reviews + interactive attribution sessions):
    evidence still. Decision rule: 3-4 settled days, keep or drop on
    numbers via the daily review.
 
+STATUS 2026-08-12: second hostile night; owner stopped the machine at
+02:46:20Z with equity ~$496 (~$8 above the switch). Side split at 6.9se
+(sells -13.12 c/ct vs buys +9.49): a uniform macro lean across metals,
+crypto, and oil farming the short side of symmetric quoting. Same-night
+forensics REFUTED two queued levers before they were built - the
+trailing-drift pull (losing sells sat on flat trailing tape; the
+adverse-side variant would have suppressed the night's best fills) and
+the hour-of-day curfew (lifetime map is flat at 0.1se; the bleeds are
+episodic, not clock-bound). Surviving design: an in-bot PER-SIDE
+ROLLING-EXPECTANCY TRIPWIRE (trip a side at ~-8 c/ct on >=100 ct over
+~2h, pull that side for a cooloff, keep the healthy side). Full record:
+research/ATTRIBUTION-DRIFT-2026-08-12.md. Restart is gated on the
+tripwire shipping; the open delay stays (its invariants held all night).
+
 Deliberately NOT on the queue: speed. The reflex arc is network and
 exchange round trips (50-300 ms) plus a deliberate 2 s requote throttle;
 the code's share is microseconds after the 2026-08-07 O(1) fixes (see
