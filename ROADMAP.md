@@ -109,6 +109,9 @@ ROLLING-EXPECTANCY TRIPWIRE (trip a side at ~-8 c/ct on >=100 ct over
 ~2h, pull that side for a cooloff, keep the healthy side). Full record:
 research/ATTRIBUTION-DRIFT-2026-08-12.md. Restart is gated on the
 tripwire shipping; the open delay stays (its invariants held all night).
+TRIPWIRE BUILT same night (M7, branch side-tripwire, 15 new tests, 249
+total passing) - pending owner PR review, merge, deploy, and machine
+start.
 
 Deliberately NOT on the queue: speed. The reflex arc is network and
 exchange round trips (50-300 ms) plus a deliberate 2 s requote throttle;

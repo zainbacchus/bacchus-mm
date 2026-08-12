@@ -306,6 +306,7 @@ class MarketWorker:
         dry_run: bool = False,
         reduce_only: bool = False,
         gate: Optional[QuotingGate] = None,
+        side_suppressor=None,
     ):
         self.ticker = ticker
         self.exchange = exchange
@@ -323,6 +324,10 @@ class MarketWorker:
         # 2026-07-17 (C1): shared session gate (sweep cooloff). A private
         # default keeps single-worker tests and tools unchanged.
         self.gate = gate or QuotingGate()
+        # M7 (2026-08-12): shared per-side tripwire (fifteen mode). When a side
+        # is suppressed book-wide, this worker cancels/refuses that side while
+        # the healthy side keeps quoting. duck-typed: blocked(side, now)->bool.
+        self.side_suppressor = side_suppressor
         # 2026-07-17 (C1): set on a trading_is_paused rejection; the next
         # reconcile pass clears it and grants one fresh placement probe.
         # Round 2: _pause_suspected_at backs a 5-min self-clear fallback so a
@@ -704,6 +709,15 @@ class MarketWorker:
                     min_book_spread=self.strategy.min_book_spread,
                     join_margin=self.strategy.join_margin,
                 )
+        # M7 (2026-08-12): a side the tripwire measured bleeding book-wide is
+        # suppressed for its cooloff; the healthy side keeps working. Applied
+        # before the exit-only shaping so both constraints compose.
+        if self.side_suppressor is not None:
+            _now_m = time.monotonic()
+            if quotes.bid is not None and self.side_suppressor.blocked("buy", _now_m):
+                quotes.bid, quotes.bid_size = None, 0
+            if quotes.ask is not None and self.side_suppressor.blocked("sell", _now_m):
+                quotes.ask, quotes.ask_size = None, 0
         if self.reduce_only or blocked:
             # Exit-only quoting: suppress the side that would grow |position|,
             # cap the exit size at the position so we never flip through flat.

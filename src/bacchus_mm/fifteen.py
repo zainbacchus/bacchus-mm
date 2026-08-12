@@ -31,10 +31,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import signal
 import sys
 import time
 import uuid
+from collections import deque
 from dataclasses import dataclass, field, replace as dc_replace
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -172,6 +174,91 @@ def detect_jump(samples: list, window_s: float, now: float) -> float:
     return worst
 
 
+# Window tickers only (KXBTC15M-26AUG111915-15 etc.); legacy calm-era
+# wind-down fills must not feed the tripwire.
+_FIFTEEN_TICKER = re.compile(r"^KX[A-Z0-9]+15M-")
+
+
+class SideTripwire:
+    """M7 (2026-08-12): per-side rolling-expectancy tripwire.
+
+    Evidence: research/ATTRIBUTION-DRIFT-2026-08-12.md. Both hostile regimes
+    to date announced themselves FIRST in our own fills — one side of the
+    book bleeding at scale (2026-08-11: buys at window-open; 2026-08-12:
+    sells under a uniform macro lean, ~2se within two hours and 6.9se by
+    the owner stop) — while trailing public tape carried no usable signal
+    (the naive drift pull was refuted on data before it was built). So this
+    lever conditions on outcomes, not predictions: a rolling window of
+    per-side marked-to-market fill PnL; a side measured at or below
+    -loss_cct cents/contract on at least min_contracts stops quoting
+    BOOK-WIDE for a cooloff while the healthy side keeps working.
+
+    Pure and synchronous (testable without an event loop): the driver task
+    feeds fills and marks and calls evaluate() on a timer. One clock: the
+    caller supplies `now` everywhere (fifteen uses time.monotonic()).
+    Valuation: pnl = signed x (last mark - entry); a ticker with no mark
+    yet values at entry (zero), and a closed window's last mark freezes,
+    which converges to settlement within a tick or two on these binaries.
+    On trip, the tripped side's window is cleared so the eventual resume
+    starts from a fresh read instead of instantly re-tripping on stale
+    fills; the side takes no new fills during its cooloff by construction.
+    """
+
+    def __init__(self, loss_cct: float, min_contracts: float,
+                 window_s: float, cooloff_s: float):
+        self.loss_cct = float(loss_cct)
+        self.min_contracts = float(min_contracts)
+        self.window_s = float(window_s)
+        self.cooloff_s = float(cooloff_s)
+        self._fills: deque = deque()  # (ts, side, contracts, ticker, entry_price)
+        self._marks: dict[str, float] = {}
+        self._blocked_until = {"buy": 0.0, "sell": 0.0}
+
+    def on_fill(self, ts: float, ticker: str, signed_count: float,
+                yes_price: float) -> None:
+        sc = float(signed_count)
+        if sc == 0.0:
+            return  # fee-artifact rows carry no position (2026-08-11 note)
+        side = "buy" if sc > 0 else "sell"
+        self._fills.append((float(ts), side, abs(sc), ticker, float(yes_price)))
+
+    def mark(self, ticker: str, mid: float) -> None:
+        self._marks[ticker] = float(mid)
+
+    def blocked(self, side: str, now: float) -> bool:
+        return now < self._blocked_until.get(side, 0.0)
+
+    def evaluate(self, now: float) -> dict:
+        """Prune, value, and judge both sides. Returns
+        {"tripped": [(side, cct, contracts)], "resumed": [side]}."""
+        cutoff = now - self.window_s
+        while self._fills and self._fills[0][0] < cutoff:
+            self._fills.popleft()
+        tripped: list = []
+        resumed: list = []
+        for side in ("buy", "sell"):
+            if self._blocked_until[side] and now >= self._blocked_until[side]:
+                self._blocked_until[side] = 0.0
+                resumed.append(side)
+        if self.loss_cct <= 0:
+            return {"tripped": tripped, "resumed": resumed}
+        agg = {"buy": [0.0, 0.0], "sell": [0.0, 0.0]}  # [pnl $, contracts]
+        for _ts, side, ct, tkr, entry in self._fills:
+            mark = self._marks.get(tkr, entry)
+            sgn = 1.0 if side == "buy" else -1.0
+            agg[side][0] += sgn * ct * (mark - entry)
+            agg[side][1] += ct
+        for side, (pnl, ct) in agg.items():
+            if ct < self.min_contracts or self._blocked_until[side]:
+                continue
+            cct = 100.0 * pnl / ct
+            if cct <= -self.loss_cct:
+                self._blocked_until[side] = now + self.cooloff_s
+                self._fills = deque(x for x in self._fills if x[1] != side)
+                tripped.append((side, round(cct, 2), round(ct, 1)))
+        return {"tripped": tripped, "resumed": resumed}
+
+
 @dataclass
 class FifteenParams:
     series: list[str] = field(default_factory=lambda: list(DEFAULT_SERIES))
@@ -183,6 +270,14 @@ class FifteenParams:
     # Don't join a window in its first seconds — the book is still forming.
     min_seconds_after_open: float = 5.0
     discovery_poll_seconds: float = 10.0
+    # M7 side tripwire (2026-08-12): trip a side bleeding at or below
+    # -loss_cct cents/contract on >= min_contracts within the rolling
+    # window; pull that side book-wide for the cooloff. 0 disables.
+    # Evidence + design: research/ATTRIBUTION-DRIFT-2026-08-12.md.
+    side_trip_loss_cct: float = 8.0
+    side_trip_min_contracts: float = 100.0
+    side_trip_window_hours: float = 2.0
+    side_trip_cooloff_hours: float = 3.0
     requote_min_interval: float = 1.0
     # Two decicent ticks of slack before chasing the touch — every requote is
     # a cancel+create (12 write tokens) and forfeits queue position.
@@ -251,6 +346,18 @@ class FifteenParams:
             ),
             discovery_poll_seconds=float(
                 f.get("discovery_poll_seconds", d.discovery_poll_seconds)
+            ),
+            side_trip_loss_cct=float(
+                f.get("side_trip_loss_cct", d.side_trip_loss_cct)
+            ),
+            side_trip_min_contracts=float(
+                f.get("side_trip_min_contracts", d.side_trip_min_contracts)
+            ),
+            side_trip_window_hours=float(
+                f.get("side_trip_window_hours", d.side_trip_window_hours)
+            ),
+            side_trip_cooloff_hours=float(
+                f.get("side_trip_cooloff_hours", d.side_trip_cooloff_hours)
             ),
             requote_min_interval=float(
                 f.get("requote_min_interval", d.requote_min_interval)
@@ -635,7 +742,31 @@ async def run_fifteen(cfg: Config, live: bool, dry_run: bool) -> None:
                     events.record_mid(top.ticker, top.mid, top.bid, top.ask)
                     _orphan_mark[top.ticker] = time.monotonic()
 
-        on_fill = FillDispatcher(workers, risk, events)
+        # M7 (2026-08-12): per-side rolling-expectancy tripwire. Fed from the
+        # fill stream below, marked from live books by its driver task.
+        tripwire = (
+            SideTripwire(
+                p.side_trip_loss_cct,
+                p.side_trip_min_contracts,
+                p.side_trip_window_hours * 3600.0,
+                p.side_trip_cooloff_hours * 3600.0,
+            )
+            if p.side_trip_loss_cct > 0
+            else None
+        )
+
+        dispatch = FillDispatcher(workers, risk, events)
+
+        def on_fill(f):
+            # Mirror the dispatcher's dedup so ws redeliveries never
+            # double-count in the tripwire window (its seen-set is authoritative
+            # and updated inside the call).
+            dup = bool(f.trade_id) and f.trade_id in dispatch.seen
+            dispatch(f)
+            if tripwire is not None and not dup and _FIFTEEN_TICKER.match(f.ticker):
+                tripwire.on_fill(
+                    time.monotonic(), f.ticker, float(f.signed_count), float(f.yes_price)
+                )
 
         def active_tickers() -> list[str]:
             out = set()
@@ -691,6 +822,7 @@ async def run_fifteen(cfg: Config, live: bool, dry_run: bool) -> None:
                         w = MarketWorker(
                             tkr, ex, dc_replace(strategy_window, tick=tick),
                             risk, events, wcfg_window, dry_run=dry_run, gate=gate,
+                            side_suppressor=tripwire,
                         )
                         workers[tkr] = w
                         window_close[tkr] = close_ts
@@ -857,6 +989,39 @@ async def run_fifteen(cfg: Config, live: bool, dry_run: bool) -> None:
         beat = {"t": time.monotonic()}
         start_stall_watchdog(_threading.get_ident(), beat)
 
+        async def side_tripwire_loop():
+            """M7 driver: refresh marks from live books, evaluate the rolling
+            per-side expectancy, announce trips/resumes, and wake workers so a
+            suppressed side cancels within one requote cycle. Runs under
+            supervise(): if this monitor dies the session fail-stops, same as
+            risk_loop — dying silently would remove protection."""
+            while not stop_event.is_set():
+                now = time.monotonic()
+                for tkr, w in list(workers.items()):
+                    top = w.top
+                    if top is not None and top.mid is not None:
+                        tripwire.mark(tkr, float(top.mid))
+                verdict = tripwire.evaluate(now)
+                for side, cct, ct in verdict["tripped"]:
+                    events.emit(
+                        "side_tripwire_trip", side=side, cct=cct, contracts=ct,
+                        window_hours=p.side_trip_window_hours,
+                        cooloff_hours=p.side_trip_cooloff_hours,
+                    )
+                    log.error(
+                        "SIDE TRIPWIRE: %s side at %.2fc/ct on %.0f ct in the last "
+                        "%.1fh — pulling that side book-wide for %.1fh",
+                        side, cct, ct, p.side_trip_window_hours,
+                        p.side_trip_cooloff_hours,
+                    )
+                for side in verdict["resumed"]:
+                    events.emit("side_tripwire_resume", side=side)
+                    log.info("side tripwire: %s side resumed after cooloff", side)
+                if verdict["tripped"] or verdict["resumed"]:
+                    for w in list(workers.values()):
+                        w.wake()
+                await asyncio.sleep(30)
+
         async def loop_lag_probe():
             """2026-08-07 stall investigation: the decisive discriminator.
             sleep(1) oversleeping means the LOOP itself was frozen (blocked
@@ -932,6 +1097,8 @@ async def run_fifteen(cfg: Config, live: bool, dry_run: bool) -> None:
         if p.release_calendar:
             _spawn(release_pull_loop(), "release_pull")  # M6
         _spawn(loop_lag_probe(), "loop_lag_probe")  # 2026-08-07 stall instrumentation
+        if tripwire is not None:
+            _spawn(side_tripwire_loop(), "side_tripwire")  # M7
         _spawn(risk_loop(), "risk_loop")
         _spawn(eventlog_flush_loop(), "eventlog_flush")
         _spawn(marks_loop(), "marks_loop")
