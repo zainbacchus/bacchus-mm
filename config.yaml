@@ -98,6 +98,20 @@ fifteen:
   # dies, the bot stops quoting on its own and resumes when flow returns.
   flow_min_updates: 10
   flow_window_seconds: 30
+  # M7 per-side rolling-expectancy tripwire (2026-08-12): both hostile
+  # regimes to date announced themselves FIRST in our own fills - one side
+  # bleeding at scale (08-11 buys at window-open; 08-12 sells at 6.9se
+  # under a uniform macro lean) - while trailing public tape carried no
+  # usable signal (the naive drift pull was REFUTED on data before it was
+  # built; research/ATTRIBUTION-DRIFT-2026-08-12.md). Trip: a side at or
+  # below -loss_cct cents/contract on >= min_contracts within the rolling
+  # window stops quoting BOOK-WIDE for the cooloff; the healthy side keeps
+  # working. ~2.2se at typical volume: false-fire ~once per 6 days, and a
+  # false fire costs hours of one-sided quoting, not a halt. 0 disables.
+  side_trip_loss_cct: 8
+  side_trip_min_contracts: 100
+  side_trip_window_hours: 2
+  side_trip_cooloff_hours: 3
   # M4 spot-jump defensive pull: Coinbase spot move >= jump bps within the
   # window cancels that series' quotes for the cooloff. PULL only, never
   # pricing. Only BTC/ETH have mapped feeds; the commodities rely on M6.

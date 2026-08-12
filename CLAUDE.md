@@ -259,6 +259,15 @@ exits on it).
     research/ARB-AND-15MIN-STUDY-2026-08-06.md). Only series with a mapped
     feed get M4 (BTC/ETH today; the commodities have no free tick feed).
     Telemetry: fifteen_spot_pull, order_canceled reason=spot_jump.
+  - M7 side tripwire (2026-08-12, `side_trip_*`, fifteen.py SideTripwire):
+    rolling per-side marked-to-market expectancy over the fill stream; a
+    side at or below -loss_cct c/ct on >= min_contracts within the window
+    stops quoting BOOK-WIDE for the cooloff while the healthy side keeps
+    working. Built after two hostile regimes showed up first in our own
+    fills and after the naive trailing-drift pull was refuted on data
+    (research/ATTRIBUTION-DRIFT-2026-08-12.md). Telemetry:
+    side_tripwire_trip / side_tripwire_resume; suppression is visible as
+    one-sided quote_decision rows.
   - M5 flow gate (`flow_min_updates`/`flow_window_seconds`): quote only
     while the book shows real activity; cold workers START gated until the
     book proves itself. Evidence: first-evening thin windows ran -13 to
