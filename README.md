@@ -67,8 +67,10 @@ bankroll.
 `bacchus-mm fifteen --live` quotes Kalshi's **15-minute up/down markets**:
 join-the-touch, one contract per side, rolling to each new 15-minute window
 as it opens. The active series list lives in `config.yaml` and is managed by
-the daily review loop below (currently BTC, ETH, Gold, Silver, and WTI
-crude; the alt-crypto series were measured negative and dropped). No pricing model at
+the daily review loop below (currently BTC, ETH, Gold, Silver, WTI crude,
+and XRP; series enter and leave on their own settled evidence - the
+alt-crypto cohort measured out in August's first week, and ZEC's re-entry
+probe concluded against it within a day). No pricing model at
 all, on purpose. Three measured facts drive the design (see
 [research/](research/)):
 
@@ -81,13 +83,16 @@ all, on purpose. Three measured facts drive the design (see
    go/no-go comes from fill-vs-settlement PnL, not backtests.
 
 Mechanics specific to this mode: quotes are computed from the book
-*excluding our own resting order* (join, never lead, never cross), pulled
-75 seconds before close (the final 60 seconds is the settlement averaging
-window), and fills ride to settlement with hard inventory caps. Windows
+*excluding our own resting order* (join, never lead, never cross), start
+only 90 seconds after each window opens (fresh books anchored at the
+coin-flip price were getting sniped by spot-watchers; see the stress-test
+note below), are pulled 75 seconds before close (the final 60 seconds is
+the settlement averaging window), and fills ride to settlement with hard
+inventory caps. Windows
 whose price structure the bot cannot fully parse are refused, not guessed
 at. See [ROADMAP.md](ROADMAP.md) Phase D for the full spec.
 
-On top of the symmetric join, six **evidence levers** shape which fills the
+On top of the symmetric join, seven **evidence levers** shape which fills the
 bot declines (each independently disable-able in config, each logging its
 own attribution telemetry so reviews can score them separately):
 
@@ -122,6 +127,27 @@ own attribution telemetry so reviews can score them separately):
    pulled for a few minutes around scheduled releases (EIA petroleum status
    weekly for WTI; CPI and FOMC dates for the metals and majors),
    maintained by the daily review.
+7. *Per-side tripwire*: a rolling two-hour window of the bot's own
+   marked-to-market fill outcomes, per side. A side bleeding beyond
+   threshold on real volume stops quoting book-wide for a cooloff while
+   the healthy side keeps working. Built after two hostile regimes in
+   three days announced themselves first in the fill stream while every
+   trailing-tape signal stayed silent; the same forensics refuted two
+   prediction-side levers before they were built
+   ([research/ATTRIBUTION-DRIFT-2026-08-12.md](research/ATTRIBUTION-DRIFT-2026-08-12.md)).
+
+**The August 2026 stress test.** The first hard week is documented end to
+end and is the best argument for the logging loop: a window-open sniping
+regime cost ~$23 and tripped the kill switch (forensics traced it to the
+first minute of fresh windows and excised it with the 90-second delay:
+[research/ATTRIBUTION-WINDOW-OPEN-2026-08-11.md](research/ATTRIBUTION-WINDOW-OPEN-2026-08-11.md)),
+then a uniform macro lean farmed the short side of the book at 6.9 sigma
+the next night (the owner stopped the machine $8 above the switch after a
+pulse alarm fired first; the tripwire above is the answer:
+[research/ATTRIBUTION-DRIFT-2026-08-12.md](research/ATTRIBUTION-DRIFT-2026-08-12.md)).
+Peak-to-trough the account gave back ~$45 on a ~$500 bankroll - bounded
+by the caps and the kill switch exactly as designed - and every loss
+bought a named mechanism, a shipped counter-lever, or a refuted idea.
 
 ## The self-improvement loop
 
@@ -137,7 +163,13 @@ checkpoints and runs daily:
    expectancy with error bars, per-series verdicts, tilt evidence, anomaly
    checks, and at most three config proposals with the evidence rows quoted.
    Statistical humility is enforced: evidence that does not clear the bar
-   produces explicit HOLDs, not tweaks.
+   produces explicit HOLDs, not tweaks. Two smaller legs run beside it: a
+   six-hourly pulse check that stays silent when healthy and opens an
+   issue when fills stall or drawdown outruns the daily cadence, and an
+   interactive forensics kit (DB snapshots plus
+   [research/pickoff_report.py](research/pickoff_report.py), which splits
+   every fill into settled money vs post-fill markout) for the deep
+   attributions the routine cannot see.
 3. **A running ledger** lives at
    [research/daily/LEDGER.md](research/daily/LEDGER.md): one row per UTC day
    of bot performance (trades, markets, contracts, dollar volume, fees,
