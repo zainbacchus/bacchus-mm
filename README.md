@@ -7,6 +7,15 @@ critique it later.** You run the bot; your logs become the dataset you
 iterate on. The strategies have changed as the data came in; the logging
 loop is the product that survived.
 
+> **Status (2026-08-18): both strategies tested here have concluded with
+> measured negative edges, and the bot is stopped.** The 15-minute
+> market-making phase ended at -$62.92 on $525 (-12%) over seven trading
+> days, with the final session negative at 2.45 sigma. The full postmortem,
+> including the two arithmetic arguments that closed it, is
+> [research/RETRO-15M-2026-08-18.md](research/RETRO-15M-2026-08-18.md).
+> What survives is the measurement apparatus described below, and an
+> unusually complete map of how a small passive maker gets picked off.
+
 **In plain English:** a market maker is the currency-exchange booth at the
 airport. It posts one price to buy and a slightly higher price to sell, and
 lives on the gap between them. This bot runs tiny booths inside Kalshi's
@@ -23,9 +32,13 @@ remain), cancels its offers the instant the underlying price jumps, refuses
 the side of extreme markets that history says loses, and caps how much it
 can be wrong in any single market. Then everything it did is written down,
 and the written record is what improves: strategies here get measured,
-kept, or retired based on what the diary says. The first strategy (calm,
-slow markets) was measured, found unprofitable, and retired with a
-retrospective; the current one is its data-driven replacement.
+kept, or retired based on what the diary says. Both strategies tried here
+reached that verdict: the first (calm, slow markets) was measured,
+found unprofitable, and retired with a retrospective; its data-driven
+replacement (the 15-minute markets) lasted seven trading days before the
+same discipline retired it too, with the diary explaining exactly which
+customers were taking the pennies and why no defense could be built
+cheaply enough to stop them.
 
 **What kind of bot this is (and isn't):** not a grid bot. A grid bot lays
 out a ladder of fixed price levels in advance and waits for price to
@@ -54,24 +67,58 @@ is a fraction of a cent per contract of positive expectancy, so the whole
 project reduces to one measurable question: **is settled-PnL-per-contract
 positive, with a confidence interval that excludes zero?**
 
-Current phase: measurement at 1-contract size. Decision rules: each market
-series earns or loses its slot on its own settled numbers via the daily
-review; a positive series gets a size walk-up (its own experiment, since our
-size moves our queue position); if no configuration measures positive, the
-project concludes and the repo stands as the documented map of why. Hard
-floor under all of it: a $30 cumulative-drawdown kill switch on a ~$500
-bankroll.
+The decision rules were: each market series earns or loses its slot on its
+own settled numbers via the daily review; a positive series gets a size
+walk-up (its own experiment, since our size moves our queue position); and
+**if no configuration measures positive, the project concludes and the repo
+stands as the documented map of why.** Hard floor under all of it: a $30
+cumulative-drawdown kill switch on a ~$500 bankroll.
 
-## Current status: Phase D (active)
+That last rule fired on 2026-08-18. The answer to the question is **no**:
+measured per-contract expectancy went negative rather than merely unproven,
+and two independent arithmetic arguments (protection cost, significance
+horizon) show why more levers or more size could not fix it. See the
+result below and the [retrospective](research/RETRO-15M-2026-08-18.md).
 
-`bacchus-mm fifteen --live` quotes Kalshi's **15-minute up/down markets**:
+## The result: Phase D concluded, negative (2026-08-18)
+
+Final measured session (7.25 hours, settled-versus-settlement from a fixed
+start): **-$30.52 on 622.4 contracts = -4.90 cents/contract, se 2.00c, 2.45
+sigma negative** - the first statistically significant read the project ever
+produced in either direction, and it is on the losing side. Within it, our
+**buys** ran -13.92 c/ct on 281 contracts (~4.7 sigma) while sells made
++2.52: one side of a symmetric book was being farmed. **78% of the loss sat
+in the first quotable minute of each window** (-$23.78 of -$30.52), which is
+the minute the previous day's fix had just created.
+
+Lifetime: **$525 deposited, $462.08 equity, -$62.92 (-12%) over seven
+trading days**, about 23,000 contracts, ~$13,000 notional, $0.15 total fees,
+three kill-switch halts. Two of seven days were strongly positive (+$17.80,
++$10.58); they were one side of a distribution whose mean was never
+positive.
+
+The two arguments that ended it rather than prompting lever number eight:
+**(1) protection costs 100-300x the prize** - an outcome-conditioned breaker
+must observe a loss to detect it, so each trip of the per-side tripwire
+costs ~$8-15 by construction, and toxic episodes ran 1-2 per day against an
+11 cents/day target; **(2) the experiment could not reach significance
+before the bankroll died** - resolving the best surviving candidate (BTC at
+~+0.21 c/ct, 0.3 sigma) at 2 sigma needs ~250,000 contracts, i.e. 6-12
+months during which episode costs would exceed the account many times over.
+Full evidence, including four counter-levers refuted by data before being
+built, is in [research/RETRO-15M-2026-08-18.md](research/RETRO-15M-2026-08-18.md).
+
+The rest of this section describes what was built and measured, which is
+what the repo is for.
+
+`bacchus-mm fifteen --live` quoted Kalshi's **15-minute up/down markets**:
 join-the-touch, one contract per side, rolling to each new 15-minute window
-as it opens. The active series list lives in `config.yaml` and is managed by
-the daily review loop below (currently BTC, ETH, Gold, Silver, WTI crude,
-and XRP; series enter and leave on their own settled evidence - the
+as it opens. The series list lived in `config.yaml` and was managed by
+the daily review loop below (at conclusion: BTC, ETH, Gold, Silver, WTI
+crude, and XRP; series entered and left on their own settled evidence - the
 alt-crypto cohort measured out in August's first week, and ZEC's re-entry
 probe concluded against it within a day). No pricing model at
-all, on purpose. Three measured facts drive the design (see
+all, on purpose. Three measured facts drove the design (see
 [research/](research/)):
 
 1. The market's own mid out-predicted a spot-feed fair-value model at every
@@ -136,23 +183,42 @@ own attribution telemetry so reviews can score them separately):
    prediction-side levers before they were built
    ([research/ATTRIBUTION-DRIFT-2026-08-12.md](research/ATTRIBUTION-DRIFT-2026-08-12.md)).
 
-**The August 2026 stress test.** The first hard week is documented end to
-end and is the best argument for the logging loop: a window-open sniping
-regime cost ~$23 and tripped the kill switch (forensics traced it to the
-first minute of fresh windows and excised it with the 90-second delay:
-[research/ATTRIBUTION-WINDOW-OPEN-2026-08-11.md](research/ATTRIBUTION-WINDOW-OPEN-2026-08-11.md)),
-then a uniform macro lean farmed the short side of the book at 6.9 sigma
-the next night (the owner stopped the machine $8 above the switch after a
-pulse alarm fired first; the tripwire above is the answer:
-[research/ATTRIBUTION-DRIFT-2026-08-12.md](research/ATTRIBUTION-DRIFT-2026-08-12.md)).
-Peak-to-trough the account gave back ~$45 on a ~$500 bankroll - bounded
-by the caps and the kill switch exactly as designed - and every loss
-bought a named mechanism, a shipped counter-lever, or a refuted idea.
+**The week that ended it (August 2026).** Three regimes in four days, each
+diagnosed from the logs, each answered, and the answers were not enough:
+
+1. **Window-open snipers.** Fresh windows open anchored near 50c; spot-
+   watchers sold into our stale bids before the young book repriced. The
+   whole loss lived in the first minute (-$23 there, +$14.50 everywhere
+   else) and tripped the kill switch
+   ([forensics](research/ATTRIBUTION-WINDOW-OPEN-2026-08-11.md)). Fixed
+   with the 90-second open delay.
+2. **A uniform macro lean.** Metals, crypto, and oil drifted up together,
+   so six "diversified" books were one bet and the short side got farmed at
+   6.9 sigma while nothing ever jumped hard enough for a jump defense to
+   see ([forensics](research/ATTRIBUTION-DRIFT-2026-08-12.md)). Answered
+   with the per-side tripwire, after the same forensics refuted two
+   prediction-side levers on data.
+3. **Migration.** Within hours of the delay shipping, the loss reappeared at
+   the new first-touch minute, on normal queue depth (killing the prepared
+   join-depth counter-lever). The flow was not exploiting a location; it
+   was exploiting a predictable posture.
+
+On the final night the tripwire fired three times, leaked nothing, and the
+cohort it flagged settled even worse than it had marked - the detector was
+right - and the account still hit the kill switch. That is what closed the
+project: not a broken defense, but a working one whose minimum cost to
+observe a loss exceeded the edge it was defending. Full accounting:
+[research/RETRO-15M-2026-08-18.md](research/RETRO-15M-2026-08-18.md).
 
 ## The self-improvement loop
 
-The bot never edits itself. The loop that improves it has exactly two human
-checkpoints and runs daily:
+*Paused with the bot as of 2026-08-18, and the part of this repo most worth
+reusing.* It is also the reason the negative result is trustworthy: the
+verdict came from the same machinery that produced the daily numbers, not
+from a retrospective narrative.
+
+The bot never edits itself. The loop had exactly two human checkpoints and
+ran daily:
 
 1. **The bot trades and logs** (fly.io, 24/7): every quote decision, order,
    fill, and safety-lever action, with enough context to replay it.
@@ -405,13 +471,36 @@ targets. Run it small, read the logs, and let the data decide what happens
 next; everything this project has learned so far is written down in
 [research/](research/).
 
-The first live day of fifteen mode is a fair preview of the workflow: the
-kill switch tripped on mark-to-market noise within one window cycle, the
-settled truth measured 3.4x smaller than the marked loss, the incident
-surfaced two real bugs (fractional-fill truncation blinding the caps, and a
-crash loop that blocked re-arming), and the fixes plus four evidence-based
-strategy levers shipped the same day. Expect the bot to halt, expect the
-logs to explain why, and expect the strategy you deploy next week to differ
-from this one.
+The full arc, now that it is finished: seven trading days, about 23,000
+contracts, three kill-switch halts, seven defensive levers built, four
+counter-levers refuted by data before they were built, and a final answer of
+-$62.92 on $525. Two days looked like proof it worked; the pooled mean was
+never positive, and the last measured session was negative at 2.45 sigma.
+
+The generalizable lessons, in order of how much they cost to learn:
+
+1. **A defense that must observe a loss to detect it has a price floor**, and
+   that floor has to be small relative to the edge. Ours was ~$8-15 per
+   episode against an 11 cents/day target. Check this arithmetic before
+   building the detector, not after.
+2. **Check the significance horizon against the bankroll first.** Resolving a
+   plausible sub-cent edge here needed ~250,000 contracts; the drawdown
+   regime allowed a few thousand. That mismatch was knowable on day one.
+3. **Adverse selection relocates.** Each fix moved the seam within hours,
+   because the counterparties were exploiting a predictable posture (1-lot,
+   join-the-touch, both sides, every window), not a particular minute or
+   series. Patching locations is a treadmill.
+4. **Fitting levers to single episodes buys overfitting exposure.** After
+   seven of them plus post-hoc searches across minute, side, price band,
+   depth, hour, and series, even a later positive read would deserve
+   suspicion. Pre-register instead.
+5. The instrumentation was worth more than the strategy. Every conclusion
+   above came from settled-versus-settlement measurement with the
+   sign conventions pinned and a fixed measurement start - discipline that
+   caught two of our own fake reads (a fabricated -$75 and a phantom
+   +0.56c) before they became decisions.
+
+Expect the bot to halt, expect the logs to explain why, and expect the
+strategy to be retired rather than tuned into profitability.
 
 This is not financial advice; use at your own risk. See [LICENSE](LICENSE).

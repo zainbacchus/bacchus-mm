@@ -7,7 +7,18 @@ research/RETRO-CALM-MM-2026-08-06.md); the selector is wound down. Phases B
 and C below are RETIRED with it (they were signal/execution add-ons to the
 calm-market thesis). The active work is Phase D.
 
-## Phase D — 15-minute markets measurement (ACTIVE)
+## Phase D — 15-minute markets measurement (CONCLUDED 2026-08-18, NEGATIVE)
+
+VERDICT: passive join-the-touch MM on the 15-minute markets does not clear
+the goal. Final session -$30.52 on 622.4 ct = -4.90 c/ct at 2.45 sigma
+(first significant read in either direction, on the losing side); lifetime
+-$62.92 on $525 over seven trading days; three kill-switch halts. Closed by
+two arithmetic arguments rather than a further lever: an outcome-conditioned
+breaker costs ~$8-15 per episode to observe a loss against an 11 c/day
+target, and resolving the best surviving candidate (BTC ~+0.21 c/ct, 0.3
+sigma) at 2 sigma needs ~250,000 contracts. FULL POSTMORTEM:
+research/RETRO-15M-2026-08-18.md. Everything below is the historical record
+of the phase; the next-lever queue is retired unexecuted.
 
 Goal (owner, 2026-08-06): test whether passive MM on the 15-minute up/down
 markets can return at least 2x the risk-free rate annualized on $500-$20K.

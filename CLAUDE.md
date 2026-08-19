@@ -204,7 +204,19 @@ Implemented from REVIEW-2026-07-17.md §4 P1 table. 172 tests passing. Branch
   `KALSHI_PRIVATE_KEY` inline PEM already supported. Startup clock-skew check
   warns >2s vs the REST Date header (RSA-PSS auth is local-ms).
 
-## 2026-08-06 Phase D: fifteen mode (the active strategy — read before touching fifteen.py / join_touch.py)
+## PROJECT STATUS 2026-08-18: Phase D CONCLUDED (negative)
+
+Both strategies in this repo are retired on measured evidence. The bot is
+halted (data/HALTED on the fly volume, machine should be stopped) and both
+cloud routines are paused. Read research/RETRO-15M-2026-08-18.md FIRST: it
+carries the verdict (-$62.92 on $525; final session -4.90 c/ct at 2.45
+sigma), the three regimes, the seven levers, the four refuted counter-levers,
+and the two arithmetic arguments that closed it. Do NOT propose lever number
+eight or a restart of this configuration without engaging those two
+arguments. Config is left exactly as it ran so the final state is
+reproducible. Everything below documents the concluded phase.
+
+## 2026-08-06 Phase D: fifteen mode (the concluded strategy — read before touching fifteen.py / join_touch.py)
 
 `bacchus-mm fifteen --live` measures join-the-touch quoting on the 15-minute
 markets (ROADMAP Phase D). The calm-MM `run` path is retired but intact
