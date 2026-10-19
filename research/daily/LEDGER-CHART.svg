@@ -12,7 +12,7 @@
 </style>
 <rect class="bg" x="0" y="0" width="880" height="780"/>
 <text class="t1 title" x="62" y="26">bacchus-mm daily ledger</text>
-<text class="t2 sub" x="62" y="44">Daily volume traded ($), fills (#), and daily net PnL ($, settled, fees included) - 2026-07-15 to 2026-08-12</text>
+<text class="t2 sub" x="62" y="44">Daily volume traded ($), fills (#), and daily net PnL ($, settled, fees included) - 2026-07-15 to 2026-08-13</text>
 <text class="t2" x="62" y="58">Volume $</text>
 <line class="grid" x1="62" x2="866" y1="191.3" y2="191.3"/>
 <text class="t2 lbl" x="56" y="195.3" text-anchor="end">1,000</text>
@@ -21,35 +21,36 @@
 <line class="grid" x1="62" x2="866" y1="93.9" y2="93.9"/>
 <text class="t2 lbl" x="56" y="97.9" text-anchor="end">3,000</text>
 <line class="zero" x1="62" x2="866" y1="240" y2="240"/>
-<path d="M67.9,240.0 L67.9,243.0 Q67.9,239.0 71.9,239.0 L79.9,239.0 Q83.9,239.0 83.9,243.0 L83.9,240.0 Z" class="vol"><title>2026-07-15: $9.55 volume, 10 fills, 8 markets</title></path>
-<path d="M95.6,240.0 L95.6,243.0 Q95.6,239.0 99.6,239.0 L107.6,239.0 Q111.6,239.0 111.6,243.0 L111.6,240.0 Z" class="vol"><title>2026-07-16: $3.77 volume, 6 fills, 4 markets</title></path>
-<path d="M123.3,240.0 L123.3,243.0 Q123.3,239.0 127.3,239.0 L135.3,239.0 Q139.3,239.0 139.3,243.0 L139.3,240.0 Z" class="vol"><title>2026-07-17: $17.54 volume, 15 fills, 13 markets</title></path>
-<path d="M151.0,240.0 L151.0,243.0 Q151.0,239.0 155.0,239.0 L163.0,239.0 Q167.0,239.0 167.0,243.0 L167.0,240.0 Z" class="vol"><title>2026-07-18: $5.92 volume, 6 fills, 2 markets</title></path>
-<path d="M178.8,240.0 L178.8,242.6 Q178.8,238.6 182.8,238.6 L190.8,238.6 Q194.8,238.6 194.8,242.6 L194.8,240.0 Z" class="vol"><title>2026-07-19: $27.96 volume, 12 fills, 6 markets</title></path>
-<path d="M206.5,240.0 L206.5,243.0 Q206.5,239.0 210.5,239.0 L218.5,239.0 Q222.5,239.0 222.5,243.0 L222.5,240.0 Z" class="vol"><title>2026-07-20: $9.20 volume, 4 fills, 2 markets</title></path>
-<path d="M234.2,240.0 L234.2,243.0 Q234.2,239.0 238.2,239.0 L246.2,239.0 Q250.2,239.0 250.2,243.0 L250.2,240.0 Z" class="vol"><title>2026-07-21: $14.90 volume, 6 fills, 2 markets</title></path>
-<path d="M261.9,240.0 L261.9,242.8 Q261.9,238.8 265.9,238.8 L273.9,238.8 Q277.9,238.8 277.9,242.8 L277.9,240.0 Z" class="vol"><title>2026-07-22: $23.92 volume, 10 fills, 3 markets</title></path>
-<path d="M289.7,240.0 L289.7,242.8 Q289.7,238.8 293.7,238.8 L301.7,238.8 Q305.7,238.8 305.7,242.8 L305.7,240.0 Z" class="vol"><title>2026-07-23: $23.73 volume, 9 fills, 2 markets</title></path>
-<path d="M317.4,240.0 L317.4,243.0 Q317.4,239.0 321.4,239.0 L329.4,239.0 Q333.4,239.0 333.4,243.0 L333.4,240.0 Z" class="vol"><title>2026-07-24: $5.10 volume, 2 fills, 1 markets</title></path>
-<path d="M345.1,240.0 L345.1,243.0 Q345.1,239.0 349.1,239.0 L357.1,239.0 Q361.1,239.0 361.1,243.0 L361.1,240.0 Z" class="vol"><title>2026-07-25: $0.74 volume, 1 fills, 1 markets</title></path>
-<path d="M372.8,240.0 L372.8,243.0 Q372.8,239.0 376.8,239.0 L384.8,239.0 Q388.8,239.0 388.8,243.0 L388.8,240.0 Z" class="vol"><title>2026-07-26: $9.79 volume, 9 fills, 3 markets</title></path>
-<path d="M400.6,240.0 L400.6,243.0 Q400.6,239.0 404.6,239.0 L412.6,239.0 Q416.6,239.0 416.6,243.0 L416.6,240.0 Z" class="vol"><title>2026-07-27: $20.64 volume, 21 fills, 7 markets</title></path>
-<path d="M428.3,240.0 L428.3,243.0 Q428.3,239.0 432.3,239.0 L440.3,239.0 Q444.3,239.0 444.3,243.0 L444.3,240.0 Z" class="vol"><title>2026-07-28: $19.00 volume, 23 fills, 3 markets</title></path>
-<path d="M456.0,240.0 L456.0,243.0 Q456.0,239.0 460.0,239.0 L468.0,239.0 Q472.0,239.0 472.0,243.0 L472.0,240.0 Z" class="vol"><title>2026-07-29: $10.25 volume, 11 fills, 3 markets</title></path>
-<path d="M483.7,240.0 L483.7,243.0 Q483.7,239.0 487.7,239.0 L495.7,239.0 Q499.7,239.0 499.7,243.0 L499.7,240.0 Z" class="vol"><title>2026-07-30: $3.34 volume, 4 fills, 3 markets</title></path>
-<path d="M539.2,240.0 L539.2,243.0 Q539.2,239.0 543.2,239.0 L551.2,239.0 Q555.2,239.0 555.2,243.0 L555.2,240.0 Z" class="vol"><title>2026-08-01: $1.42 volume, 2 fills, 2 markets</title></path>
-<path d="M566.9,240.0 L566.9,243.0 Q566.9,239.0 570.9,239.0 L578.9,239.0 Q582.9,239.0 582.9,243.0 L582.9,240.0 Z" class="vol"><title>2026-08-02: $1.12 volume, 1 fills, 1 markets</title></path>
-<path d="M594.6,240.0 L594.6,243.0 Q594.6,239.0 598.6,239.0 L606.6,239.0 Q610.6,239.0 610.6,243.0 L610.6,240.0 Z" class="vol"><title>2026-08-03: $2.04 volume, 2 fills, 1 markets</title></path>
-<path d="M622.3,240.0 L622.3,243.0 Q622.3,239.0 626.3,239.0 L634.3,239.0 Q638.3,239.0 638.3,243.0 L638.3,240.0 Z" class="vol"><title>2026-08-04: $2.32 volume, 2 fills, 1 markets</title></path>
-<path d="M677.8,240.0 L677.8,189.4 Q677.8,185.4 681.8,185.4 L689.8,185.4 Q693.8,185.4 693.8,189.4 L693.8,240.0 Z" class="vol"><title>2026-08-06: $1,121 volume, 2326 fills, 73 markets</title></path>
-<path d="M705.5,240.0 L705.5,147.3 Q705.5,143.3 709.5,143.3 L717.5,143.3 Q721.5,143.3 721.5,147.3 L721.5,240.0 Z" class="vol"><title>2026-08-07: $1,987 volume, 3757 fills, 335 markets</title></path>
-<path d="M733.2,240.0 L733.2,82.9 Q733.2,78.9 737.2,78.9 L745.2,78.9 Q749.2,78.9 749.2,82.9 L749.2,240.0 Z" class="vol"><title>2026-08-08: $3,309 volume, 6588 fills, 239 markets</title></path>
-<text class="t2 lbl" x="741.2" y="73.9" text-anchor="middle">3,309</text>
-<path d="M761.0,240.0 L761.0,131.4 Q761.0,127.4 765.0,127.4 L773.0,127.4 Q777.0,127.4 777.0,131.4 L777.0,240.0 Z" class="vol"><title>2026-08-09: $2,312 volume, 4494 fills, 191 markets</title></path>
-<path d="M788.7,240.0 L788.7,151.5 Q788.7,147.5 792.7,147.5 L800.7,147.5 Q804.7,147.5 804.7,151.5 L804.7,240.0 Z" class="vol"><title>2026-08-10: $1,900 volume, 3333 fills, 448 markets</title></path>
-<path d="M816.4,240.0 L816.4,166.6 Q816.4,162.6 820.4,162.6 L828.4,162.6 Q832.4,162.6 832.4,166.6 L832.4,240.0 Z" class="vol"><title>2026-08-11: $1,589 volume, 2820 fills, 372 markets</title></path>
-<path d="M844.1,240.0 L844.1,232.2 Q844.1,228.2 848.1,228.2 L856.1,228.2 Q860.1,228.2 860.1,232.2 L860.1,240.0 Z" class="vol"><title>2026-08-12: $243 volume, 417 fills, 66 markets</title></path>
-<text class="t2 lbl" x="852.1" y="223.2" text-anchor="middle">243</text>
+<path d="M67.4,240.0 L67.4,243.0 Q67.4,239.0 71.4,239.0 L79.4,239.0 Q83.4,239.0 83.4,243.0 L83.4,240.0 Z" class="vol"><title>2026-07-15: $9.55 volume, 10 fills, 8 markets</title></path>
+<path d="M94.2,240.0 L94.2,243.0 Q94.2,239.0 98.2,239.0 L106.2,239.0 Q110.2,239.0 110.2,243.0 L110.2,240.0 Z" class="vol"><title>2026-07-16: $3.77 volume, 6 fills, 4 markets</title></path>
+<path d="M121.0,240.0 L121.0,243.0 Q121.0,239.0 125.0,239.0 L133.0,239.0 Q137.0,239.0 137.0,243.0 L137.0,240.0 Z" class="vol"><title>2026-07-17: $17.54 volume, 15 fills, 13 markets</title></path>
+<path d="M147.8,240.0 L147.8,243.0 Q147.8,239.0 151.8,239.0 L159.8,239.0 Q163.8,239.0 163.8,243.0 L163.8,240.0 Z" class="vol"><title>2026-07-18: $5.92 volume, 6 fills, 2 markets</title></path>
+<path d="M174.6,240.0 L174.6,242.6 Q174.6,238.6 178.6,238.6 L186.6,238.6 Q190.6,238.6 190.6,242.6 L190.6,240.0 Z" class="vol"><title>2026-07-19: $27.96 volume, 12 fills, 6 markets</title></path>
+<path d="M201.4,240.0 L201.4,243.0 Q201.4,239.0 205.4,239.0 L213.4,239.0 Q217.4,239.0 217.4,243.0 L217.4,240.0 Z" class="vol"><title>2026-07-20: $9.20 volume, 4 fills, 2 markets</title></path>
+<path d="M228.2,240.0 L228.2,243.0 Q228.2,239.0 232.2,239.0 L240.2,239.0 Q244.2,239.0 244.2,243.0 L244.2,240.0 Z" class="vol"><title>2026-07-21: $14.90 volume, 6 fills, 2 markets</title></path>
+<path d="M255.0,240.0 L255.0,242.8 Q255.0,238.8 259.0,238.8 L267.0,238.8 Q271.0,238.8 271.0,242.8 L271.0,240.0 Z" class="vol"><title>2026-07-22: $23.92 volume, 10 fills, 3 markets</title></path>
+<path d="M281.8,240.0 L281.8,242.8 Q281.8,238.8 285.8,238.8 L293.8,238.8 Q297.8,238.8 297.8,242.8 L297.8,240.0 Z" class="vol"><title>2026-07-23: $23.73 volume, 9 fills, 2 markets</title></path>
+<path d="M308.6,240.0 L308.6,243.0 Q308.6,239.0 312.6,239.0 L320.6,239.0 Q324.6,239.0 324.6,243.0 L324.6,240.0 Z" class="vol"><title>2026-07-24: $5.10 volume, 2 fills, 1 markets</title></path>
+<path d="M335.4,240.0 L335.4,243.0 Q335.4,239.0 339.4,239.0 L347.4,239.0 Q351.4,239.0 351.4,243.0 L351.4,240.0 Z" class="vol"><title>2026-07-25: $0.74 volume, 1 fills, 1 markets</title></path>
+<path d="M362.2,240.0 L362.2,243.0 Q362.2,239.0 366.2,239.0 L374.2,239.0 Q378.2,239.0 378.2,243.0 L378.2,240.0 Z" class="vol"><title>2026-07-26: $9.79 volume, 9 fills, 3 markets</title></path>
+<path d="M389.0,240.0 L389.0,243.0 Q389.0,239.0 393.0,239.0 L401.0,239.0 Q405.0,239.0 405.0,243.0 L405.0,240.0 Z" class="vol"><title>2026-07-27: $20.64 volume, 21 fills, 7 markets</title></path>
+<path d="M415.8,240.0 L415.8,243.0 Q415.8,239.0 419.8,239.0 L427.8,239.0 Q431.8,239.0 431.8,243.0 L431.8,240.0 Z" class="vol"><title>2026-07-28: $19.00 volume, 23 fills, 3 markets</title></path>
+<path d="M442.6,240.0 L442.6,243.0 Q442.6,239.0 446.6,239.0 L454.6,239.0 Q458.6,239.0 458.6,243.0 L458.6,240.0 Z" class="vol"><title>2026-07-29: $10.25 volume, 11 fills, 3 markets</title></path>
+<path d="M469.4,240.0 L469.4,243.0 Q469.4,239.0 473.4,239.0 L481.4,239.0 Q485.4,239.0 485.4,243.0 L485.4,240.0 Z" class="vol"><title>2026-07-30: $3.34 volume, 4 fills, 3 markets</title></path>
+<path d="M523.0,240.0 L523.0,243.0 Q523.0,239.0 527.0,239.0 L535.0,239.0 Q539.0,239.0 539.0,243.0 L539.0,240.0 Z" class="vol"><title>2026-08-01: $1.42 volume, 2 fills, 2 markets</title></path>
+<path d="M549.8,240.0 L549.8,243.0 Q549.8,239.0 553.8,239.0 L561.8,239.0 Q565.8,239.0 565.8,243.0 L565.8,240.0 Z" class="vol"><title>2026-08-02: $1.12 volume, 1 fills, 1 markets</title></path>
+<path d="M576.6,240.0 L576.6,243.0 Q576.6,239.0 580.6,239.0 L588.6,239.0 Q592.6,239.0 592.6,243.0 L592.6,240.0 Z" class="vol"><title>2026-08-03: $2.04 volume, 2 fills, 1 markets</title></path>
+<path d="M603.4,240.0 L603.4,243.0 Q603.4,239.0 607.4,239.0 L615.4,239.0 Q619.4,239.0 619.4,243.0 L619.4,240.0 Z" class="vol"><title>2026-08-04: $2.32 volume, 2 fills, 1 markets</title></path>
+<path d="M657.0,240.0 L657.0,189.4 Q657.0,185.4 661.0,185.4 L669.0,185.4 Q673.0,185.4 673.0,189.4 L673.0,240.0 Z" class="vol"><title>2026-08-06: $1,121 volume, 2326 fills, 73 markets</title></path>
+<path d="M683.8,240.0 L683.8,147.3 Q683.8,143.3 687.8,143.3 L695.8,143.3 Q699.8,143.3 699.8,147.3 L699.8,240.0 Z" class="vol"><title>2026-08-07: $1,987 volume, 3757 fills, 335 markets</title></path>
+<path d="M710.6,240.0 L710.6,82.9 Q710.6,78.9 714.6,78.9 L722.6,78.9 Q726.6,78.9 726.6,82.9 L726.6,240.0 Z" class="vol"><title>2026-08-08: $3,309 volume, 6588 fills, 239 markets</title></path>
+<text class="t2 lbl" x="718.6" y="73.9" text-anchor="middle">3,309</text>
+<path d="M737.4,240.0 L737.4,131.4 Q737.4,127.4 741.4,127.4 L749.4,127.4 Q753.4,127.4 753.4,131.4 L753.4,240.0 Z" class="vol"><title>2026-08-09: $2,312 volume, 4494 fills, 191 markets</title></path>
+<path d="M764.2,240.0 L764.2,151.5 Q764.2,147.5 768.2,147.5 L776.2,147.5 Q780.2,147.5 780.2,151.5 L780.2,240.0 Z" class="vol"><title>2026-08-10: $1,900 volume, 3333 fills, 448 markets</title></path>
+<path d="M791.0,240.0 L791.0,166.6 Q791.0,162.6 795.0,162.6 L803.0,162.6 Q807.0,162.6 807.0,166.6 L807.0,240.0 Z" class="vol"><title>2026-08-11: $1,589 volume, 2820 fills, 372 markets</title></path>
+<path d="M817.8,240.0 L817.8,208.6 Q817.8,204.6 821.8,204.6 L829.8,204.6 Q833.8,204.6 833.8,208.6 L833.8,240.0 Z" class="vol"><title>2026-08-12: $726 volume, 1325 fills, 222 markets</title></path>
+<path d="M844.6,240.0 L844.6,239.2 Q844.6,235.2 848.6,235.2 L856.6,235.2 Q860.6,235.2 860.6,239.2 L860.6,240.0 Z" class="vol"><title>2026-08-13: $98.53 volume, 177 fills, 49 markets</title></path>
+<text class="t2 lbl" x="852.6" y="230.2" text-anchor="middle">98.53</text>
 <text class="t2" x="62" y="294">Fills #</text>
 <line class="grid" x1="62" x2="866" y1="425.8" y2="425.8"/>
 <text class="t2 lbl" x="56" y="429.8" text-anchor="end">1,000</text>
@@ -66,76 +67,78 @@
 <line class="grid" x1="62" x2="866" y1="304.3" y2="304.3"/>
 <text class="t2 lbl" x="56" y="308.3" text-anchor="end">7,000</text>
 <line class="zero" x1="62" x2="866" y1="446" y2="446"/>
-<path d="M67.9,446.0 L67.9,449.0 Q67.9,445.0 71.9,445.0 L79.9,445.0 Q83.9,445.0 83.9,449.0 L83.9,446.0 Z" class="fil"><title>2026-07-15: 10 fills, 19.0 contracts, 8 markets</title></path>
-<path d="M95.6,446.0 L95.6,449.0 Q95.6,445.0 99.6,445.0 L107.6,445.0 Q111.6,445.0 111.6,449.0 L111.6,446.0 Z" class="fil"><title>2026-07-16: 6 fills, 11.2 contracts, 4 markets</title></path>
-<path d="M123.3,446.0 L123.3,449.0 Q123.3,445.0 127.3,445.0 L135.3,445.0 Q139.3,445.0 139.3,449.0 L139.3,446.0 Z" class="fil"><title>2026-07-17: 15 fills, 27.0 contracts, 13 markets</title></path>
-<path d="M151.0,446.0 L151.0,449.0 Q151.0,445.0 155.0,445.0 L163.0,445.0 Q167.0,445.0 167.0,449.0 L167.0,446.0 Z" class="fil"><title>2026-07-18: 6 fills, 12.0 contracts, 2 markets</title></path>
-<path d="M178.8,446.0 L178.8,449.0 Q178.8,445.0 182.8,445.0 L190.8,445.0 Q194.8,445.0 194.8,449.0 L194.8,446.0 Z" class="fil"><title>2026-07-19: 12 fills, 57.0 contracts, 6 markets</title></path>
-<path d="M206.5,446.0 L206.5,449.0 Q206.5,445.0 210.5,445.0 L218.5,445.0 Q222.5,445.0 222.5,449.0 L222.5,446.0 Z" class="fil"><title>2026-07-20: 4 fills, 20.0 contracts, 2 markets</title></path>
-<path d="M234.2,446.0 L234.2,449.0 Q234.2,445.0 238.2,445.0 L246.2,445.0 Q250.2,445.0 250.2,449.0 L250.2,446.0 Z" class="fil"><title>2026-07-21: 6 fills, 30.0 contracts, 2 markets</title></path>
-<path d="M261.9,446.0 L261.9,449.0 Q261.9,445.0 265.9,445.0 L273.9,445.0 Q277.9,445.0 277.9,449.0 L277.9,446.0 Z" class="fil"><title>2026-07-22: 10 fills, 47.0 contracts, 3 markets</title></path>
-<path d="M289.7,446.0 L289.7,449.0 Q289.7,445.0 293.7,445.0 L301.7,445.0 Q305.7,445.0 305.7,449.0 L305.7,446.0 Z" class="fil"><title>2026-07-23: 9 fills, 41.0 contracts, 2 markets</title></path>
-<path d="M317.4,446.0 L317.4,449.0 Q317.4,445.0 321.4,445.0 L329.4,445.0 Q333.4,445.0 333.4,449.0 L333.4,446.0 Z" class="fil"><title>2026-07-24: 2 fills, 10.0 contracts, 1 markets</title></path>
-<path d="M345.1,446.0 L345.1,449.0 Q345.1,445.0 349.1,445.0 L357.1,445.0 Q361.1,445.0 361.1,449.0 L361.1,446.0 Z" class="fil"><title>2026-07-25: 1 fills, 1.0 contracts, 1 markets</title></path>
-<path d="M372.8,446.0 L372.8,449.0 Q372.8,445.0 376.8,445.0 L384.8,445.0 Q388.8,445.0 388.8,449.0 L388.8,446.0 Z" class="fil"><title>2026-07-26: 9 fills, 19.6 contracts, 3 markets</title></path>
-<path d="M400.6,446.0 L400.6,449.0 Q400.6,445.0 404.6,445.0 L412.6,445.0 Q416.6,445.0 416.6,449.0 L416.6,446.0 Z" class="fil"><title>2026-07-27: 21 fills, 39.0 contracts, 7 markets</title></path>
-<path d="M428.3,446.0 L428.3,449.0 Q428.3,445.0 432.3,445.0 L440.3,445.0 Q444.3,445.0 444.3,449.0 L444.3,446.0 Z" class="fil"><title>2026-07-28: 23 fills, 39.7 contracts, 3 markets</title></path>
-<path d="M456.0,446.0 L456.0,449.0 Q456.0,445.0 460.0,445.0 L468.0,445.0 Q472.0,445.0 472.0,449.0 L472.0,446.0 Z" class="fil"><title>2026-07-29: 11 fills, 18.1 contracts, 3 markets</title></path>
-<path d="M483.7,446.0 L483.7,449.0 Q483.7,445.0 487.7,445.0 L495.7,445.0 Q499.7,445.0 499.7,449.0 L499.7,446.0 Z" class="fil"><title>2026-07-30: 4 fills, 6.0 contracts, 3 markets</title></path>
-<path d="M539.2,446.0 L539.2,449.0 Q539.2,445.0 543.2,445.0 L551.2,445.0 Q555.2,445.0 555.2,449.0 L555.2,446.0 Z" class="fil"><title>2026-08-01: 2 fills, 4.0 contracts, 2 markets</title></path>
-<path d="M566.9,446.0 L566.9,449.0 Q566.9,445.0 570.9,445.0 L578.9,445.0 Q582.9,445.0 582.9,449.0 L582.9,446.0 Z" class="fil"><title>2026-08-02: 1 fills, 2.0 contracts, 1 markets</title></path>
-<path d="M594.6,446.0 L594.6,449.0 Q594.6,445.0 598.6,445.0 L606.6,445.0 Q610.6,445.0 610.6,449.0 L610.6,446.0 Z" class="fil"><title>2026-08-03: 2 fills, 4.0 contracts, 1 markets</title></path>
-<path d="M622.3,446.0 L622.3,449.0 Q622.3,445.0 626.3,445.0 L634.3,445.0 Q638.3,445.0 638.3,449.0 L638.3,446.0 Z" class="fil"><title>2026-08-04: 2 fills, 4.0 contracts, 1 markets</title></path>
-<path d="M677.8,446.0 L677.8,402.9 Q677.8,398.9 681.8,398.9 L689.8,398.9 Q693.8,398.9 693.8,402.9 L693.8,446.0 Z" class="fil"><title>2026-08-06: 2,326 fills, 2246.6 contracts, 73 markets</title></path>
-<path d="M705.5,446.0 L705.5,374.0 Q705.5,370.0 709.5,370.0 L717.5,370.0 Q721.5,370.0 721.5,374.0 L721.5,446.0 Z" class="fil"><title>2026-08-07: 3,757 fills, 3621.8 contracts, 335 markets</title></path>
-<path d="M733.2,446.0 L733.2,316.7 Q733.2,312.7 737.2,312.7 L745.2,312.7 Q749.2,312.7 749.2,316.7 L749.2,446.0 Z" class="fil"><title>2026-08-08: 6,588 fills, 6339.7 contracts, 239 markets</title></path>
-<text class="t2 lbl" x="741.2" y="307.7" text-anchor="middle">6,588</text>
-<path d="M761.0,446.0 L761.0,359.0 Q761.0,355.0 765.0,355.0 L773.0,355.0 Q777.0,355.0 777.0,359.0 L777.0,446.0 Z" class="fil"><title>2026-08-09: 4,494 fills, 4344.9 contracts, 191 markets</title></path>
-<path d="M788.7,446.0 L788.7,382.5 Q788.7,378.5 792.7,378.5 L800.7,378.5 Q804.7,378.5 804.7,382.5 L804.7,446.0 Z" class="fil"><title>2026-08-10: 3,333 fills, 3168.7 contracts, 448 markets</title></path>
-<path d="M816.4,446.0 L816.4,392.9 Q816.4,388.9 820.4,388.9 L828.4,388.9 Q832.4,388.9 832.4,392.9 L832.4,446.0 Z" class="fil"><title>2026-08-11: 2,820 fills, 2680.8 contracts, 372 markets</title></path>
-<path d="M844.1,446.0 L844.1,441.6 Q844.1,437.6 848.1,437.6 L856.1,437.6 Q860.1,437.6 860.1,441.6 L860.1,446.0 Z" class="fil"><title>2026-08-12: 417 fills, 388.4 contracts, 66 markets</title></path>
-<text class="t2 lbl" x="852.1" y="432.6" text-anchor="middle">417</text>
+<path d="M67.4,446.0 L67.4,449.0 Q67.4,445.0 71.4,445.0 L79.4,445.0 Q83.4,445.0 83.4,449.0 L83.4,446.0 Z" class="fil"><title>2026-07-15: 10 fills, 19.0 contracts, 8 markets</title></path>
+<path d="M94.2,446.0 L94.2,449.0 Q94.2,445.0 98.2,445.0 L106.2,445.0 Q110.2,445.0 110.2,449.0 L110.2,446.0 Z" class="fil"><title>2026-07-16: 6 fills, 11.2 contracts, 4 markets</title></path>
+<path d="M121.0,446.0 L121.0,449.0 Q121.0,445.0 125.0,445.0 L133.0,445.0 Q137.0,445.0 137.0,449.0 L137.0,446.0 Z" class="fil"><title>2026-07-17: 15 fills, 27.0 contracts, 13 markets</title></path>
+<path d="M147.8,446.0 L147.8,449.0 Q147.8,445.0 151.8,445.0 L159.8,445.0 Q163.8,445.0 163.8,449.0 L163.8,446.0 Z" class="fil"><title>2026-07-18: 6 fills, 12.0 contracts, 2 markets</title></path>
+<path d="M174.6,446.0 L174.6,449.0 Q174.6,445.0 178.6,445.0 L186.6,445.0 Q190.6,445.0 190.6,449.0 L190.6,446.0 Z" class="fil"><title>2026-07-19: 12 fills, 57.0 contracts, 6 markets</title></path>
+<path d="M201.4,446.0 L201.4,449.0 Q201.4,445.0 205.4,445.0 L213.4,445.0 Q217.4,445.0 217.4,449.0 L217.4,446.0 Z" class="fil"><title>2026-07-20: 4 fills, 20.0 contracts, 2 markets</title></path>
+<path d="M228.2,446.0 L228.2,449.0 Q228.2,445.0 232.2,445.0 L240.2,445.0 Q244.2,445.0 244.2,449.0 L244.2,446.0 Z" class="fil"><title>2026-07-21: 6 fills, 30.0 contracts, 2 markets</title></path>
+<path d="M255.0,446.0 L255.0,449.0 Q255.0,445.0 259.0,445.0 L267.0,445.0 Q271.0,445.0 271.0,449.0 L271.0,446.0 Z" class="fil"><title>2026-07-22: 10 fills, 47.0 contracts, 3 markets</title></path>
+<path d="M281.8,446.0 L281.8,449.0 Q281.8,445.0 285.8,445.0 L293.8,445.0 Q297.8,445.0 297.8,449.0 L297.8,446.0 Z" class="fil"><title>2026-07-23: 9 fills, 41.0 contracts, 2 markets</title></path>
+<path d="M308.6,446.0 L308.6,449.0 Q308.6,445.0 312.6,445.0 L320.6,445.0 Q324.6,445.0 324.6,449.0 L324.6,446.0 Z" class="fil"><title>2026-07-24: 2 fills, 10.0 contracts, 1 markets</title></path>
+<path d="M335.4,446.0 L335.4,449.0 Q335.4,445.0 339.4,445.0 L347.4,445.0 Q351.4,445.0 351.4,449.0 L351.4,446.0 Z" class="fil"><title>2026-07-25: 1 fills, 1.0 contracts, 1 markets</title></path>
+<path d="M362.2,446.0 L362.2,449.0 Q362.2,445.0 366.2,445.0 L374.2,445.0 Q378.2,445.0 378.2,449.0 L378.2,446.0 Z" class="fil"><title>2026-07-26: 9 fills, 19.6 contracts, 3 markets</title></path>
+<path d="M389.0,446.0 L389.0,449.0 Q389.0,445.0 393.0,445.0 L401.0,445.0 Q405.0,445.0 405.0,449.0 L405.0,446.0 Z" class="fil"><title>2026-07-27: 21 fills, 39.0 contracts, 7 markets</title></path>
+<path d="M415.8,446.0 L415.8,449.0 Q415.8,445.0 419.8,445.0 L427.8,445.0 Q431.8,445.0 431.8,449.0 L431.8,446.0 Z" class="fil"><title>2026-07-28: 23 fills, 39.7 contracts, 3 markets</title></path>
+<path d="M442.6,446.0 L442.6,449.0 Q442.6,445.0 446.6,445.0 L454.6,445.0 Q458.6,445.0 458.6,449.0 L458.6,446.0 Z" class="fil"><title>2026-07-29: 11 fills, 18.1 contracts, 3 markets</title></path>
+<path d="M469.4,446.0 L469.4,449.0 Q469.4,445.0 473.4,445.0 L481.4,445.0 Q485.4,445.0 485.4,449.0 L485.4,446.0 Z" class="fil"><title>2026-07-30: 4 fills, 6.0 contracts, 3 markets</title></path>
+<path d="M523.0,446.0 L523.0,449.0 Q523.0,445.0 527.0,445.0 L535.0,445.0 Q539.0,445.0 539.0,449.0 L539.0,446.0 Z" class="fil"><title>2026-08-01: 2 fills, 4.0 contracts, 2 markets</title></path>
+<path d="M549.8,446.0 L549.8,449.0 Q549.8,445.0 553.8,445.0 L561.8,445.0 Q565.8,445.0 565.8,449.0 L565.8,446.0 Z" class="fil"><title>2026-08-02: 1 fills, 2.0 contracts, 1 markets</title></path>
+<path d="M576.6,446.0 L576.6,449.0 Q576.6,445.0 580.6,445.0 L588.6,445.0 Q592.6,445.0 592.6,449.0 L592.6,446.0 Z" class="fil"><title>2026-08-03: 2 fills, 4.0 contracts, 1 markets</title></path>
+<path d="M603.4,446.0 L603.4,449.0 Q603.4,445.0 607.4,445.0 L615.4,445.0 Q619.4,445.0 619.4,449.0 L619.4,446.0 Z" class="fil"><title>2026-08-04: 2 fills, 4.0 contracts, 1 markets</title></path>
+<path d="M657.0,446.0 L657.0,402.9 Q657.0,398.9 661.0,398.9 L669.0,398.9 Q673.0,398.9 673.0,402.9 L673.0,446.0 Z" class="fil"><title>2026-08-06: 2,326 fills, 2246.6 contracts, 73 markets</title></path>
+<path d="M683.8,446.0 L683.8,374.0 Q683.8,370.0 687.8,370.0 L695.8,370.0 Q699.8,370.0 699.8,374.0 L699.8,446.0 Z" class="fil"><title>2026-08-07: 3,757 fills, 3621.8 contracts, 335 markets</title></path>
+<path d="M710.6,446.0 L710.6,316.7 Q710.6,312.7 714.6,312.7 L722.6,312.7 Q726.6,312.7 726.6,316.7 L726.6,446.0 Z" class="fil"><title>2026-08-08: 6,588 fills, 6339.7 contracts, 239 markets</title></path>
+<text class="t2 lbl" x="718.6" y="307.7" text-anchor="middle">6,588</text>
+<path d="M737.4,446.0 L737.4,359.0 Q737.4,355.0 741.4,355.0 L749.4,355.0 Q753.4,355.0 753.4,359.0 L753.4,446.0 Z" class="fil"><title>2026-08-09: 4,494 fills, 4344.9 contracts, 191 markets</title></path>
+<path d="M764.2,446.0 L764.2,382.5 Q764.2,378.5 768.2,378.5 L776.2,378.5 Q780.2,378.5 780.2,382.5 L780.2,446.0 Z" class="fil"><title>2026-08-10: 3,333 fills, 3168.7 contracts, 448 markets</title></path>
+<path d="M791.0,446.0 L791.0,392.9 Q791.0,388.9 795.0,388.9 L803.0,388.9 Q807.0,388.9 807.0,392.9 L807.0,446.0 Z" class="fil"><title>2026-08-11: 2,820 fills, 2680.8 contracts, 372 markets</title></path>
+<path d="M817.8,446.0 L817.8,423.2 Q817.8,419.2 821.8,419.2 L829.8,419.2 Q833.8,419.2 833.8,423.2 L833.8,446.0 Z" class="fil"><title>2026-08-12: 1,325 fills, 1226.8 contracts, 222 markets</title></path>
+<path d="M844.6,446.0 L844.6,446.4 Q844.6,442.4 848.6,442.4 L856.6,442.4 Q860.6,442.4 860.6,446.4 L860.6,446.0 Z" class="fil"><title>2026-08-13: 177 fills, 162.9 contracts, 49 markets</title></path>
+<text class="t2 lbl" x="852.6" y="437.4" text-anchor="middle">177</text>
 <text class="t2" x="62" y="500">Net PnL $</text>
-<line class="grid" x1="62" x2="866" y1="680.3" y2="680.3"/>
-<text class="t2 lbl" x="56" y="684.3" text-anchor="end">-25</text>
-<line class="grid" x1="62" x2="866" y1="595.5" y2="595.5"/>
-<text class="t2 lbl" x="56" y="599.5" text-anchor="end">-2</text>
-<line class="zero" x1="62" x2="866" y1="588.1" y2="588.1"/>
-<text class="t2 lbl" x="56" y="592.1" text-anchor="end">0</text>
-<path d="M67.9,588.1 L67.9,585.9 Q67.9,589.9 71.9,589.9 L79.9,589.9 Q83.9,589.9 83.9,585.9 L83.9,588.1 Z" class="neg"><title>2026-07-15: -0.47 net PnL (cum -0.47)</title></path>
-<path d="M95.6,588.1 L95.6,585.1 Q95.6,589.1 99.6,589.1 L107.6,589.1 Q111.6,589.1 111.6,585.1 L111.6,588.1 Z" class="neg"><title>2026-07-16: -0.19 net PnL (cum -0.66)</title></path>
-<path d="M123.3,588.1 L123.3,589.4 Q123.3,593.4 127.3,593.4 L135.3,593.4 Q139.3,593.4 139.3,589.4 L139.3,588.1 Z" class="neg"><title>2026-07-17: -1.42 net PnL (cum -2.08)</title></path>
-<path d="M151.0,588.1 L151.0,585.1 Q151.0,589.1 155.0,589.1 L163.0,589.1 Q167.0,589.1 167.0,585.1 L167.0,588.1 Z" class="neg"><title>2026-07-18: -0.02 net PnL (cum -2.10)</title></path>
-<path d="M178.8,588.1 L178.8,592.8 Q178.8,596.8 182.8,596.8 L190.8,596.8 Q194.8,596.8 194.8,592.8 L194.8,588.1 Z" class="neg"><title>2026-07-19: -2.35 net PnL (cum -4.45)</title></path>
-<path d="M206.5,588.1 L206.5,585.1 Q206.5,581.1 210.5,581.1 L218.5,581.1 Q222.5,581.1 222.5,585.1 L222.5,588.1 Z" class="pos"><title>2026-07-20: +1.90 net PnL (cum -2.55)</title></path>
-<path d="M234.2,588.1 L234.2,591.1 Q234.2,587.1 238.2,587.1 L246.2,587.1 Q250.2,587.1 250.2,591.1 L250.2,588.1 Z" class="pos"><title>2026-07-21: +0.15 net PnL (cum -2.40)</title></path>
-<path d="M261.9,588.1 L261.9,592.3 Q261.9,596.3 265.9,596.3 L273.9,596.3 Q277.9,596.3 277.9,592.3 L277.9,588.1 Z" class="neg"><title>2026-07-22: -2.20 net PnL (cum -4.60)</title></path>
-<path d="M289.7,588.1 L289.7,590.7 Q289.7,586.7 293.7,586.7 L301.7,586.7 Q305.7,586.7 305.7,590.7 L305.7,588.1 Z" class="pos"><title>2026-07-23: +0.40 net PnL (cum -4.20)</title></path>
-<path d="M317.4,588.1 L317.4,585.1 Q317.4,589.1 321.4,589.1 L329.4,589.1 Q333.4,589.1 333.4,585.1 L333.4,588.1 Z" class="pos"><title>2026-07-24: +0.00 net PnL (cum -4.20)</title></path>
-<path d="M345.1,588.1 L345.1,585.1 Q345.1,589.1 349.1,589.1 L357.1,589.1 Q361.1,589.1 361.1,585.1 L361.1,588.1 Z" class="pos"><title>2026-07-25: +0.00 net PnL (cum -4.20)</title></path>
-<path d="M372.8,588.1 L372.8,585.1 Q372.8,589.1 376.8,589.1 L384.8,589.1 Q388.8,589.1 388.8,585.1 L388.8,588.1 Z" class="neg"><title>2026-07-26: -0.04 net PnL (cum -4.24)</title></path>
-<path d="M400.6,588.1 L400.6,585.1 Q400.6,589.1 404.6,589.1 L412.6,589.1 Q416.6,589.1 416.6,585.1 L416.6,588.1 Z" class="neg"><title>2026-07-27: -0.05 net PnL (cum -4.29)</title></path>
-<path d="M428.3,588.1 L428.3,585.1 Q428.3,589.1 432.3,589.1 L440.3,589.1 Q444.3,589.1 444.3,585.1 L444.3,588.1 Z" class="pos"><title>2026-07-28: -0.00 net PnL (cum -4.29)</title></path>
-<path d="M456.0,588.1 L456.0,585.1 Q456.0,589.1 460.0,589.1 L468.0,589.1 Q472.0,589.1 472.0,585.1 L472.0,588.1 Z" class="neg"><title>2026-07-29: -0.03 net PnL (cum -4.32)</title></path>
-<path d="M483.7,588.1 L483.7,585.1 Q483.7,589.1 487.7,589.1 L495.7,589.1 Q499.7,589.1 499.7,585.1 L499.7,588.1 Z" class="pos"><title>2026-07-30: +0.00 net PnL (cum -4.32)</title></path>
-<path d="M539.2,588.1 L539.2,585.1 Q539.2,589.1 543.2,589.1 L551.2,589.1 Q555.2,589.1 555.2,585.1 L555.2,588.1 Z" class="pos"><title>2026-08-01: +0.00 net PnL (cum -4.32)</title></path>
-<path d="M566.9,588.1 L566.9,585.1 Q566.9,589.1 570.9,589.1 L578.9,589.1 Q582.9,589.1 582.9,585.1 L582.9,588.1 Z" class="pos"><title>2026-08-02: +0.00 net PnL (cum -4.32)</title></path>
-<path d="M594.6,588.1 L594.6,585.1 Q594.6,589.1 598.6,589.1 L606.6,589.1 Q610.6,589.1 610.6,585.1 L610.6,588.1 Z" class="pos"><title>2026-08-03: +0.00 net PnL (cum -4.32)</title></path>
-<path d="M622.3,588.1 L622.3,585.1 Q622.3,589.1 626.3,589.1 L634.3,589.1 Q638.3,589.1 638.3,585.1 L638.3,588.1 Z" class="pos"><title>2026-08-04: +0.00 net PnL (cum -4.32)</title></path>
-<path d="M677.8,588.1 L677.8,613.2 Q677.8,617.2 681.8,617.2 L689.8,617.2 Q693.8,617.2 693.8,613.2 L693.8,588.1 Z" class="neg"><title>2026-08-06: -7.88 net PnL (cum -12.20)</title></path>
-<path d="M705.5,588.1 L705.5,580.4 Q705.5,576.4 709.5,576.4 L717.5,576.4 Q721.5,576.4 721.5,580.4 L721.5,588.1 Z" class="pos"><title>2026-08-07: +3.18 net PnL (cum -9.02)</title></path>
-<path d="M733.2,588.1 L733.2,526.5 Q733.2,522.5 737.2,522.5 L745.2,522.5 Q749.2,522.5 749.2,526.5 L749.2,588.1 Z" class="pos"><title>2026-08-08: +17.80 net PnL (cum +8.78)</title></path>
-<text class="t2 lbl" x="741.2" y="517.5" text-anchor="middle">+17.80</text>
-<path d="M761.0,588.1 L761.0,553.1 Q761.0,549.1 765.0,549.1 L773.0,549.1 Q777.0,549.1 777.0,553.1 L777.0,588.1 Z" class="pos"><title>2026-08-09: +10.58 net PnL (cum +19.36)</title></path>
-<path d="M788.7,588.1 L788.7,616.3 Q788.7,620.3 792.7,620.3 L800.7,620.3 Q804.7,620.3 804.7,616.3 L804.7,588.1 Z" class="neg"><title>2026-08-10: -8.72 net PnL (cum +10.64)</title></path>
-<path d="M816.4,588.1 L816.4,663.5 Q816.4,667.5 820.4,667.5 L828.4,667.5 Q832.4,667.5 832.4,663.5 L832.4,588.1 Z" class="neg"><title>2026-08-11: -21.52 net PnL (cum -10.88)</title></path>
-<text class="t2 lbl" x="824.4" y="680.5" text-anchor="middle">-21.52</text>
-<path d="M844.1,588.1 L844.1,640.3 Q844.1,644.3 848.1,644.3 L856.1,644.3 Q860.1,644.3 860.1,640.3 L860.1,588.1 Z" class="neg"><title>2026-08-12: -15.22 net PnL (cum -26.10)</title></path>
-<text class="t2 lbl" x="852.1" y="657.3" text-anchor="middle">-15.22</text>
-<text class="t2 lbl" x="75.9" y="702" text-anchor="middle">Jul 15</text>
-<text class="t2 lbl" x="269.9" y="702" text-anchor="middle">Jul 22</text>
-<text class="t2 lbl" x="464.0" y="702" text-anchor="middle">Jul 29</text>
-<text class="t2 lbl" x="658.1" y="702" text-anchor="middle">Aug 05</text>
-<text class="t2 lbl" x="852.1" y="702" text-anchor="middle">Aug 12</text>
+<line class="grid" x1="62" x2="866" y1="681.4" y2="681.4"/>
+<text class="t2 lbl" x="56" y="685.4" text-anchor="end">-37</text>
+<line class="grid" x1="62" x2="866" y1="594.0" y2="594.0"/>
+<text class="t2 lbl" x="56" y="598.0" text-anchor="end">-7</text>
+<line class="zero" x1="62" x2="866" y1="573.7" y2="573.7"/>
+<text class="t2 lbl" x="56" y="577.7" text-anchor="end">0</text>
+<path d="M67.4,573.7 L67.4,574.6 Q67.4,578.6 71.4,578.6 L79.4,578.6 Q83.4,578.6 83.4,574.6 L83.4,573.7 Z" class="neg"><title>2026-07-15: -1.71 net PnL (cum -1.71)</title></path>
+<path d="M94.2,573.7 L94.2,571.4 Q94.2,575.4 98.2,575.4 L106.2,575.4 Q110.2,575.4 110.2,571.4 L110.2,573.7 Z" class="neg"><title>2026-07-16: -0.61 net PnL (cum -2.32)</title></path>
+<path d="M121.0,573.7 L121.0,572.5 Q121.0,576.5 125.0,576.5 L133.0,576.5 Q137.0,576.5 137.0,572.5 L137.0,573.7 Z" class="neg"><title>2026-07-17: -0.99 net PnL (cum -3.31)</title></path>
+<path d="M147.8,573.7 L147.8,570.7 Q147.8,574.7 151.8,574.7 L159.8,574.7 Q163.8,574.7 163.8,570.7 L163.8,573.7 Z" class="neg"><title>2026-07-18: -0.02 net PnL (cum -3.33)</title></path>
+<path d="M174.6,573.7 L174.6,576.5 Q174.6,580.5 178.6,580.5 L186.6,580.5 Q190.6,580.5 190.6,576.5 L190.6,573.7 Z" class="neg"><title>2026-07-19: -2.35 net PnL (cum -5.68)</title></path>
+<path d="M201.4,573.7 L201.4,572.1 Q201.4,568.1 205.4,568.1 L213.4,568.1 Q217.4,568.1 217.4,572.1 L217.4,573.7 Z" class="pos"><title>2026-07-20: +1.90 net PnL (cum -3.78)</title></path>
+<path d="M228.2,573.7 L228.2,576.7 Q228.2,572.7 232.2,572.7 L240.2,572.7 Q244.2,572.7 244.2,576.7 L244.2,573.7 Z" class="pos"><title>2026-07-21: +0.15 net PnL (cum -3.63)</title></path>
+<path d="M255.0,573.7 L255.0,576.1 Q255.0,580.1 259.0,580.1 L267.0,580.1 Q271.0,580.1 271.0,576.1 L271.0,573.7 Z" class="neg"><title>2026-07-22: -2.20 net PnL (cum -5.83)</title></path>
+<path d="M281.8,573.7 L281.8,576.5 Q281.8,572.5 285.8,572.5 L293.8,572.5 Q297.8,572.5 297.8,576.5 L297.8,573.7 Z" class="pos"><title>2026-07-23: +0.40 net PnL (cum -5.43)</title></path>
+<path d="M308.6,573.7 L308.6,570.7 Q308.6,574.7 312.6,574.7 L320.6,574.7 Q324.6,574.7 324.6,570.7 L324.6,573.7 Z" class="pos"><title>2026-07-24: +0.00 net PnL (cum -5.43)</title></path>
+<path d="M335.4,573.7 L335.4,570.7 Q335.4,574.7 339.4,574.7 L347.4,574.7 Q351.4,574.7 351.4,570.7 L351.4,573.7 Z" class="pos"><title>2026-07-25: +0.00 net PnL (cum -5.43)</title></path>
+<path d="M362.2,573.7 L362.2,571.8 Q362.2,575.8 366.2,575.8 L374.2,575.8 Q378.2,575.8 378.2,571.8 L378.2,573.7 Z" class="neg"><title>2026-07-26: -0.74 net PnL (cum -6.17)</title></path>
+<path d="M389.0,573.7 L389.0,571.3 Q389.0,575.3 393.0,575.3 L401.0,575.3 Q405.0,575.3 405.0,571.3 L405.0,573.7 Z" class="neg"><title>2026-07-27: -0.55 net PnL (cum -6.72)</title></path>
+<path d="M415.8,573.7 L415.8,575.9 Q415.8,571.9 419.8,571.9 L427.8,571.9 Q431.8,571.9 431.8,575.9 L431.8,573.7 Z" class="pos"><title>2026-07-28: +0.60 net PnL (cum -6.12)</title></path>
+<path d="M442.6,573.7 L442.6,570.7 Q442.6,574.7 446.6,574.7 L454.6,574.7 Q458.6,574.7 458.6,570.7 L458.6,573.7 Z" class="neg"><title>2026-07-29: -0.03 net PnL (cum -6.15)</title></path>
+<path d="M469.4,573.7 L469.4,570.7 Q469.4,574.7 473.4,574.7 L481.4,574.7 Q485.4,574.7 485.4,570.7 L485.4,573.7 Z" class="pos"><title>2026-07-30: +0.00 net PnL (cum -6.15)</title></path>
+<path d="M523.0,573.7 L523.0,570.7 Q523.0,574.7 527.0,574.7 L535.0,574.7 Q539.0,574.7 539.0,570.7 L539.0,573.7 Z" class="pos"><title>2026-08-01: +0.00 net PnL (cum -6.15)</title></path>
+<path d="M549.8,573.7 L549.8,570.7 Q549.8,574.7 553.8,574.7 L561.8,574.7 Q565.8,574.7 565.8,570.7 L565.8,573.7 Z" class="pos"><title>2026-08-02: +0.00 net PnL (cum -6.15)</title></path>
+<path d="M576.6,573.7 L576.6,570.7 Q576.6,574.7 580.6,574.7 L588.6,574.7 Q592.6,574.7 592.6,570.7 L592.6,573.7 Z" class="pos"><title>2026-08-03: +0.00 net PnL (cum -6.15)</title></path>
+<path d="M603.4,573.7 L603.4,570.7 Q603.4,574.7 607.4,574.7 L615.4,574.7 Q619.4,574.7 619.4,570.7 L619.4,573.7 Z" class="pos"><title>2026-08-04: +0.00 net PnL (cum -6.15)</title></path>
+<path d="M657.0,573.7 L657.0,591.8 Q657.0,595.8 661.0,595.8 L669.0,595.8 Q673.0,595.8 673.0,591.8 L673.0,573.7 Z" class="neg"><title>2026-08-06: -7.60 net PnL (cum -13.75)</title></path>
+<path d="M683.8,573.7 L683.8,568.4 Q683.8,564.4 687.8,564.4 L695.8,564.4 Q699.8,564.4 699.8,568.4 L699.8,573.7 Z" class="pos"><title>2026-08-07: +3.18 net PnL (cum -10.57)</title></path>
+<path d="M710.6,573.7 L710.6,526.5 Q710.6,522.5 714.6,522.5 L722.6,522.5 Q726.6,522.5 726.6,526.5 L726.6,573.7 Z" class="pos"><title>2026-08-08: +17.58 net PnL (cum +7.01)</title></path>
+<text class="t2 lbl" x="718.6" y="517.5" text-anchor="middle">+17.58</text>
+<path d="M737.4,573.7 L737.4,546.9 Q737.4,542.9 741.4,542.9 L749.4,542.9 Q753.4,542.9 753.4,546.9 L753.4,573.7 Z" class="pos"><title>2026-08-09: +10.58 net PnL (cum +17.59)</title></path>
+<path d="M764.2,573.7 L764.2,595.5 Q764.2,599.5 768.2,599.5 L776.2,599.5 Q780.2,599.5 780.2,595.5 L780.2,573.7 Z" class="neg"><title>2026-08-10: -8.88 net PnL (cum +8.71)</title></path>
+<path d="M791.0,573.7 L791.0,632.3 Q791.0,636.3 795.0,636.3 L803.0,636.3 Q807.0,636.3 807.0,632.3 L807.0,573.7 Z" class="neg"><title>2026-08-11: -21.52 net PnL (cum -12.81)</title></path>
+<path d="M817.8,573.7 L817.8,663.5 Q817.8,667.5 821.8,667.5 L829.8,667.5 Q833.8,667.5 833.8,663.5 L833.8,573.7 Z" class="neg"><title>2026-08-12: -32.24 net PnL (cum -45.05)</title></path>
+<text class="t2 lbl" x="825.8" y="680.5" text-anchor="middle">-32.24</text>
+<path d="M844.6,573.7 L844.6,619.7 Q844.6,623.7 848.6,623.7 L856.6,623.7 Q860.6,623.7 860.6,619.7 L860.6,573.7 Z" class="neg"><title>2026-08-13: -17.19 net PnL (cum -62.24)</title></path>
+<text class="t2 lbl" x="852.6" y="636.7" text-anchor="middle">-17.19</text>
+<text class="t2 lbl" x="75.4" y="702" text-anchor="middle">Jul 15</text>
+<text class="t2 lbl" x="263.0" y="702" text-anchor="middle">Jul 22</text>
+<text class="t2 lbl" x="450.6" y="702" text-anchor="middle">Jul 29</text>
+<text class="t2 lbl" x="638.2" y="702" text-anchor="middle">Aug 05</text>
+<text class="t2 lbl" x="825.8" y="702" text-anchor="middle">Aug 12</text>
 <text class="t2 lbl" x="866" y="768" text-anchor="end">settled-only PnL attributed to fill day; source: LEDGER.csv</text>
 </svg>
