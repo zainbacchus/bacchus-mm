@@ -1,0 +1,14 @@
+2026-11-13T03:44:35Z piece start: 150 markets, until 2026-11-13T05:34:35Z, run ends 2026-11-16T21:19:00Z, trade cursors carried over
+2026-11-13T03:44:39Z poll 1: markets 150, books changed 150, trades 1, loop 4.3s
+2026-11-13T03:46:48Z trade error KXCPIYOY-26DEC-T4.0: <HTTPError 429: 'Too Many Requests'>
+2026-11-13T04:07:26Z meta_of chunk failed: <HTTPError 429: 'Too Many Requests'>; trying tickers one by one
+2026-11-13T04:08:15Z trade error KXCPIYOY-26DEC-T3.5: <HTTPError 429: 'Too Many Requests'>
+2026-11-13T04:12:15Z trade error KXAPRPOTUS-26NOV13-39.1: <HTTPError 429: 'Too Many Requests'>
+2026-11-13T04:13:47Z trade error KXNEWTAYLOR-TS-27: <HTTPError 429: 'Too Many Requests'>
+2026-11-13T04:14:03Z trade error KXVIDEOGAMESADS-26DEC06-T119.5: <HTTPError 429: 'Too Many Requests'>
+2026-11-13T04:15:15Z poll 61: markets 150, books changed 150, trades 1, loop 10.9s
+2026-11-13T04:19:22Z trade error KXHULUAPP-26DEC08-T89: <HTTPError 429: 'Too Many Requests'>
+2026-11-13T04:45:14Z poll 121: markets 150, books changed 150, trades 1, loop 10.8s
+2026-11-13T05:01:48Z trade error KXVTPERMITS-27MAY03-T1400: <HTTPError 429: 'Too Many Requests'>
+2026-11-13T05:15:10Z poll 181: markets 150, books changed 150, trades 0, loop 6.5s
+2026-11-13T05:34:40Z piece end (piece complete): 220 polls, 405 trades
