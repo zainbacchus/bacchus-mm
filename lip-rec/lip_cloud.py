@@ -19,6 +19,7 @@ usage: python3 lip_cloud.py OUTDIR            record one piece
        python3 lip_cloud.py OUTDIR --check    can this machine reach Kalshi?
        python3 lip_cloud.py OUTDIR --push     commit and push finished files
        python3 lip_cloud.py OUTDIR --status   one-screen health report
+       python3 lip_cloud.py OUTDIR --fresh    is another session already recording?
 env:   LIP_END (epoch seconds, end of the whole run), LIP_CHUNK (6600),
        LIP_ROTATE (900)
 """
@@ -324,7 +325,9 @@ def record():
     (OUT / "current_log.txt").unlink()
     push(final=done or stopped)
     word = "RUN COMPLETE" if done else ("STOPPED" if stopped else "RESTART NOW")
-    print(f"{word} | {why} | polls {n_poll} | last poll {iso(t_last) if t_last else '-'}")
+    line = f"{word} | {why} | polls {n_poll} | last poll {iso(t_last) if t_last else '-'}"
+    (OUT / "last_exit.txt").write_text(line + "\n")
+    print(line)
 
 
 def git(top, *args, timeout=240):
@@ -370,6 +373,22 @@ def do_push(everything=False):
             git(top, "-c", "rebase.autoStash=true", "pull", "-q", "--rebase", "origin", BRANCH)
             r = git(top, "push", "-q", "origin", "HEAD:refs/heads/" + BRANCH)
         log("push ok" if r.returncode == 0 else "push FAILED: " + (r.stderr or r.stdout)[-300:].strip(), "push.log")
+
+
+def fresh():
+    """A session that starts while another one is recording must stand down:
+    two recorders would push the same minutes twice."""
+    top = toplevel()
+    r = git(top, "fetch", "-q", "origin", BRANCH, timeout=120)
+    if r.returncode:
+        print("NO FRESH DATA | could not fetch the branch: " + (r.stderr or r.stdout).strip()[-200:])
+        return
+    ct, _, subj = git(top, "log", "-1", "--format=%ct %s", "FETCH_HEAD").stdout.strip().partition(" ")
+    age = (time.time() - float(ct)) / 60 if ct else 1e9
+    if subj.startswith("lip recorder: data") and age < 20:
+        print(f"ANOTHER SESSION IS RECORDING | it pushed {age:.0f} minutes ago | do not start")
+    else:
+        print(f"NO FRESH DATA | last push {age:.0f} minutes ago | go ahead")
 
 
 def check():
@@ -428,5 +447,7 @@ if __name__ == "__main__":
         do_push(MODE == "--push-all")
     elif MODE == "--status":
         status()
+    elif MODE == "--fresh":
+        fresh()
     else:
         sys.exit(__doc__)
