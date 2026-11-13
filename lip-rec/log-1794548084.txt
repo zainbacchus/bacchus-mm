@@ -1,0 +1,11 @@
+2026-11-13T05:34:44Z piece start: 150 markets, until 2026-11-13T07:24:44Z, run ends 2026-11-16T21:19:00Z, trade cursors carried over
+2026-11-13T05:34:50Z poll 1: markets 150, books changed 150, trades 0, loop 6.2s
+2026-11-13T06:04:46Z poll 61: markets 150, books changed 150, trades 0, loop 2.2s
+2026-11-13T06:30:32Z trade error KXCAHPIYOY-27FEB23-T419.85: <HTTPError 429: 'Too Many Requests'>
+2026-11-13T06:34:46Z poll 121: markets 150, books changed 150, trades 0, loop 2.2s
+2026-11-13T06:44:00Z trade error KXRT-HEX-60: <HTTPError 429: 'Too Many Requests'>
+2026-11-13T06:51:49Z trade error KXVTPERMITS-27MAY03-T1400: <HTTPError 429: 'Too Many Requests'>
+2026-11-13T06:52:04Z trade error KXAPRPOTUS-26NOV13-39.1: <HTTPError 429: 'Too Many Requests'>
+2026-11-13T07:04:57Z poll 181: markets 150, books changed 150, trades 0, loop 6.6s
+2026-11-13T07:20:37Z trade error KXUBERAPP-26DEC08-T100.5: <HTTPError 429: 'Too Many Requests'>
+2026-11-13T07:24:23Z piece end (piece complete): 220 polls, 273 trades
